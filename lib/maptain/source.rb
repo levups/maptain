@@ -287,7 +287,7 @@ module Maptain
       if definitions[:video]
         fields_list(instance_exec(record, locale, &definitions[:video])).each do |fields|
           fields = fields.merge(VIDEO_LOCATIONS.to_h { |key| [key, fields[key] && absolute(fields[key])] }.compact)
-          tag, reason = Xml.video(fields)
+          tag, reason = Xml.video(fields, url)
           tag ? tags << tag : rejected << [url, reason]
         end
       end
@@ -298,9 +298,9 @@ module Maptain
       tags
     end
 
-    # A Hash, an array of them, or nil, as a list of hashes with Symbol keys.
+    # A Hash, an array of them, nil or false, as a list of hashes with Symbol keys: nil and false are no video.
     def fields_list(given)
-      (given.is_a?(Hash) ? [given] : Array(given)).map { |fields| fields.to_h.transform_keys(&:to_sym) }
+      (given.is_a?(Hash) ? [given] : Array(given)).filter_map { |fields| fields.to_h.transform_keys(&:to_sym) if fields } # rubocop:disable Style/SafeNavigation -- &. would call to_h on false
     end
 
     # The url block runs with the host of its language and with that language as I18n.locale: route helpers,
@@ -364,11 +364,14 @@ module Maptain
       @shard_size ||= definitions[:shard_size] || default_shard_size
     end
 
+    # A news source gets files of at most MAX_NEWS_PER_FILE articles, all its languages counted: Google reads no more.
     def default_shard_size
       locale_count = configuration.locales.size
       alternates = (locale_count > 1) ? locale_count + 1 : 0
       bytes_per_record = locale_count * (BYTES_PER_URL_ESTIMATE + alternates * BYTES_PER_ALTERNATE_ESTIMATE)
-      [ShardWriter::MAX_URLS_PER_FILE / locale_count, TARGET_BYTES_PER_FILE / bytes_per_record].min.clamp(1..)
+      sizes = [ShardWriter::MAX_URLS_PER_FILE / locale_count, TARGET_BYTES_PER_FILE / bytes_per_record]
+      sizes << Xml::MAX_NEWS_PER_FILE / locale_count if definitions[:news]
+      sizes.min.clamp(1..)
     end
 
     # Two updates in the same second must not look like one.

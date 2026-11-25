@@ -82,7 +82,7 @@ class MediaTest < MaptainTest
 
     assert(messages.any? { |message| message.include?(":rating") })
     assert(messages.any? { |message| message.include?("lasting 0 seconds") })
-    assert(messages.any? { |message| message.include?("publication_date that is not a W3C date") })
+    assert(messages.any? { |message| message.include?("publication_date that is not a full W3C date") })
   end
 
   def test_news_is_written_with_the_language_of_each_url
@@ -136,7 +136,109 @@ class MediaTest < MaptainTest
     refute storage.content_by_name.key?("sitemap-news-00000.xml.gz")
   end
 
+  def test_false_and_nil_are_no_video
+    Maptain.configuration.sources = [video_source { |post| (post.id == 1) ? false : [nil, VIDEO] }]
+    create_post(1)
+    create_post(2)
+    warnings = build.warnings
+
+    assert_equal 2, storage.xml("sitemap-video-00000.xml.gz").scan("<video:video>").size
+    assert_empty warnings
+  end
+
+  def test_forbidden_characters_and_invalid_utf8_are_dropped
+    Maptain.configuration.sources = [video_source { VIDEO.merge(title: "Pl\u0000ay \v", description: "caf\xE9 au lait") }]
+    create_post(1)
+    build
+    xml = storage.xml("sitemap-video-00000.xml.gz")
+
+    assert_includes xml, "<video:title>Play</video:title><video:description>caf au lait</video:description>"
+  end
+
+  def test_tags_follow_the_schema_order_and_long_titles_are_cut
+    Maptain.configuration.sources = [video_source do
+      VIDEO.merge(title: "t" * 150, publication_date: "2026-11-01", expiration_date: "2027-11-01T00:00:00Z", duration: "90")
+    end]
+    create_post(1)
+    build
+    xml = storage.xml("sitemap-video-00000.xml.gz")
+
+    assert_includes xml, "<video:title>#{"t" * 100}</video:title>"
+    assert_includes xml, "<video:duration>90</video:duration><video:expiration_date>2027-11-01T00:00:00Z</video:expiration_date>" \
+      "<video:publication_date>2026-11-01</video:publication_date></video:video>"
+  end
+
+  def test_a_malformed_duration_a_partial_date_or_the_page_as_player_are_left_out
+    Maptain.configuration.sources = [video_source do |post|
+      case post.id
+      when 1 then VIDEO.merge(duration: "1e4")
+      when 2 then VIDEO.merge(publication_date: "2026-11")
+      else VIDEO.merge(player_loc: "https://example.com/en/posts/3")
+      end
+    end]
+    (1..3).each { |id| create_post(id) }
+    messages = build.warnings.map(&:message)
+
+    # Only the French page of post 3 keeps its video: its player is the English page, not itself.
+    assert_equal 1, storage.xml("sitemap-video-00000.xml.gz").scan("<video:video>").size
+    assert(messages.any? { |message| message.include?("lasting \"1e4\" seconds") })
+    assert(messages.any? { |message| message.include?("not a full W3C date") })
+    assert(messages.any? { |message| message.include?("is the page itself") })
+  end
+
+  def test_blank_optional_fields_are_left_out
+    Maptain.configuration.sources = [video_source { VIDEO.merge(duration: "", publication_date: " ") }]
+    create_post(1)
+    build
+
+    assert_includes storage.xml("sitemap-video-00000.xml.gz"), "<video:player_loc>https://player.example.com/1</video:player_loc></video:video>"
+  end
+
+  def test_chinese_news_languages_are_the_two_google_takes
+    assert_equal "zh-cn", Maptain::Xml.news_language("zh-hans")
+    assert_equal "zh-tw", Maptain::Xml.news_language("zh-hant-tw")
+    assert_equal "zh-tw", Maptain::Xml.news_language("zh-hk")
+    assert_equal "zh-cn", Maptain::Xml.news_language("zh-cn")
+    assert_equal "zh", Maptain::Xml.news_language("zh")
+  end
+
+  def test_a_given_news_language_is_spelled_as_google_wants
+    Maptain.configuration.sources = [source("NewsSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      news { |post| {name: "Example News", title: post.title, publication_date: "2026-11-24", language: "pt_BR"} }
+    end]
+    create_post(1)
+    build
+
+    assert_includes storage.xml("sitemap-news-00000.xml.gz"), "<news:language>pt</news:language>"
+  end
+
+  def test_a_news_source_gets_files_of_at_most_a_thousand_articles
+    Maptain.configuration.sources = [source("NewsSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      news { |post| {name: "Example News", title: post.title, publication_date: "2026-11-24"} }
+    end]
+    Post.insert_all((1..1_200).map { |id| {id:, title: "Post #{id}", created_at: LONG_AGO, updated_at: LONG_AGO} })
+    build
+    news_counts = storage.content_by_name.keys.grep(/\Asitemap-news-/).map { |name| storage.xml(name).scan("<news:news>").size }
+
+    assert_operator news_counts.max, :<=, 1_000
+    assert_equal 2_400, news_counts.sum
+  end
+
   private
+
+  VIDEO = {title: "Video", description: "About it", thumbnail_loc: "/t.jpg", player_loc: "https://player.example.com/1"}.freeze
+
+  def video_source(&video)
+    source("VideoSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      video(&video)
+    end
+  end
 
   def source(name, &definition)
     Class.new(Maptain::Source) do
