@@ -323,6 +323,8 @@ module Maptain
       elsif page.modified_at && page.modified_at > @manifest.built_at
         warn_counted(source, :future_lastmod, page.urls.first, "has a lastmod in the future (#{page.lastmod})")
       end
+      # Counted by kind of mistake (its first words), as likely to repeat over the source as a lastmod.
+      page.rejected_media.each { |url, reason| warn_counted(source, :"media #{reason.split(" ").first(4).join(" ")}", url, reason) }
     end
 
     def inspect_index(url, file_count)

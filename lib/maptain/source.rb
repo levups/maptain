@@ -23,6 +23,10 @@ module Maptain
     UNSAFE_BYTE = Regexp.new(UNSAFE, Regexp::NOENCODING)
     # Records loaded at once for the llms.txt: one more than it may list.
     LLMS_TXT_BATCH = 201
+    # The media of a page without video or news: no tags by language, nothing left out.
+    NO_MEDIA = [{}.freeze, [].freeze].freeze
+    # The fields of a video that are URLs, completed with the host like a page's.
+    VIDEO_LOCATIONS = %i[thumbnail_loc content_loc player_loc].freeze
 
     class << self
       def inherited(subclass)
@@ -62,6 +66,18 @@ module Maptain
 
       def images(&block)
         definitions[:images] = block
+      end
+
+      # The videos of a page in a language: {thumbnail_loc:, title:, description:, player_loc: or content_loc:,
+      # duration:, publication_date:, expiration_date:}, an array of them, or nil. Runs as the url block does.
+      def video(&block)
+        definitions[:video] = block
+      end
+
+      # The Google News entry of an article in a language: {name:, title:, publication_date:, language:}, or nil.
+      # Runs as the url block does; language defaults to the page's.
+      def news(&block)
+        definitions[:news] = block
       end
 
       # The SQL expression whose greatest value changes whenever a record's sitemap entry does.
@@ -245,8 +261,46 @@ module Maptain
       locales = locales_of(record)
       given_lastmod = lastmod_of(record)
       lastmod = Xml.timestamp(given_lastmod)
-      Page.new(url_by_locale: url_by_locale_of(record, locales), lastmod:, modified_at: lastmod && Xml.time(lastmod),
-        images: images_of(record), rejected_lastmod: (given_lastmod if lastmod.nil? && given_lastmod.present?))
+      url_by_locale = url_by_locale_of(record, locales)
+      media_by_locale, rejected_media = media_of(record, locales, url_by_locale)
+      Page.new(url_by_locale:, lastmod:, modified_at: lastmod && Xml.time(lastmod), images: images_of(record),
+        rejected_lastmod: (given_lastmod if lastmod.nil? && given_lastmod.present?), media_by_locale:, rejected_media:)
+    end
+
+    # The video and news tags of each language of a page, with what was left out and why. Nothing to work out
+    # for a source without video or news blocks, which most are.
+    def media_of(record, locales, url_by_locale)
+      return NO_MEDIA unless definitions[:video] || definitions[:news]
+
+      rejected = []
+      media = locales.each_with_object({}) do |locale, media_by_locale|
+        hreflang = Xml.hreflang(locale)
+        url = url_by_locale[hreflang] or next
+        tags = speaking(locale) { media_tags(record, locale, hreflang, url, rejected) }
+        media_by_locale[hreflang] = tags unless tags.empty?
+      end
+      [media, rejected]
+    end
+
+    def media_tags(record, locale, hreflang, url, rejected)
+      tags = +""
+      if definitions[:video]
+        fields_list(instance_exec(record, locale, &definitions[:video])).each do |fields|
+          fields = fields.merge(VIDEO_LOCATIONS.to_h { |key| [key, fields[key] && absolute(fields[key])] }.compact)
+          tag, reason = Xml.video(fields)
+          tag ? tags << tag : rejected << [url, reason]
+        end
+      end
+      if definitions[:news] && (fields = instance_exec(record, locale, &definitions[:news]))
+        tag, reason = Xml.news(fields.to_h.transform_keys(&:to_sym), hreflang)
+        tag ? tags << tag : rejected << [url, reason]
+      end
+      tags
+    end
+
+    # A Hash, an array of them, or nil, as a list of hashes with Symbol keys.
+    def fields_list(given)
+      (given.is_a?(Hash) ? [given] : Array(given)).map { |fields| fields.to_h.transform_keys(&:to_sym) }
     end
 
     # The url block runs with the host of its language and with that language as I18n.locale: route helpers,
