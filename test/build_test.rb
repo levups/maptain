@@ -21,7 +21,7 @@ class BuildTest < MaptainTest
 
     assert_equal <<~XML, storage.xml("sitemap-post-00000.xml.gz")
       <?xml version="1.0" encoding="UTF-8"?>
-      <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+      <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1" xmlns:news="http://www.google.com/schemas/sitemap-news/0.9">
       <url><loc>https://example.com/en/posts/1</loc><lastmod>2026-01-01T12:00:00Z</lastmod><xhtml:link rel="alternate" hreflang="en" href="https://example.com/en/posts/1"/><xhtml:link rel="alternate" hreflang="fr" href="https://example.com/fr/posts/1"/><xhtml:link rel="alternate" hreflang="x-default" href="https://example.com/en/posts/1"/></url>
       <url><loc>https://example.com/fr/posts/1</loc><lastmod>2026-01-01T12:00:00Z</lastmod><xhtml:link rel="alternate" hreflang="en" href="https://example.com/en/posts/1"/><xhtml:link rel="alternate" hreflang="fr" href="https://example.com/fr/posts/1"/><xhtml:link rel="alternate" hreflang="x-default" href="https://example.com/en/posts/1"/></url>
       </urlset>
