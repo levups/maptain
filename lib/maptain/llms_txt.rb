@@ -11,8 +11,10 @@ module Maptain
     NAME = "llms.txt"
     # A model reads the file in one go: past this, it stops being a summary of the site.
     MAX_LINKS = 200
-    # What I18n.t gives for a key it does not have, unless told default: nil.
-    MISSING_TRANSLATION = "Translation missing: "
+    # The most records read for one file: past it, a scope should pick the records of the file's language itself.
+    MAX_RECORDS = 2_000
+    # How I18n.t begins what it gives for a key it does not have, unless told default: nil.
+    MISSING_TRANSLATION = "Translation missing"
 
     Entry = Data.define(:section, :title, :url, :notes)
     # A file to write: its name, its language and the host it is for.
@@ -113,17 +115,16 @@ module Maptain
       text.to_s.gsub(/[[:space:]]+/, " ").strip
     end
 
-    # Serves /llms.txt from config.storage, the file of the request's host: on a site with one host per language,
-    # and when the sitemaps live elsewhere (config.sitemaps_url), where crawlers do not look for it.
-    # In config/routes.rb: get "llms.txt", to: Maptain::LlmsTxt::App.new
-    # Each file is read at most once per TTL_SECONDS and process, by one request while the others get the copy at
-    # hand; when the storage fails, that copy is served on and the storage asked again after RETRY_SECONDS.
+    # Serves /llms.txt from config.storage, the file of the request's host, for one host per language or sitemaps
+    # served elsewhere: get "llms.txt", to: Maptain::LlmsTxt::App.new in config/routes.rb. A file is read once per
+    # TTL_SECONDS and process, by one request while the others get the copy at hand; with the storage unreachable,
+    # that copy is served on, or a 503 when there is none yet: the file is not gone.
     class App
       TTL_SECONDS = 300
       RETRY_SECONDS = 30
       CONTENT_TYPE = "text/plain; charset=utf-8"
 
-      Cached = Struct.new(:content, :expires_at, :refreshing)
+      Cached = Struct.new(:content, :expires_at, :refreshing, :error)
 
       def initialize
         @mutex = Mutex.new
@@ -136,6 +137,8 @@ module Maptain
         return [404, {"content-type" => CONTENT_TYPE}, ["Not Found"]] unless content
 
         [200, {"content-type" => CONTENT_TYPE, "cache-control" => "public, max-age=#{TTL_SECONDS}"}, [content]]
+      rescue # storage unreachable and no copy at hand: try again later, the file is not gone
+        [503, {"content-type" => CONTENT_TYPE, "retry-after" => RETRY_SECONDS.to_s}, ["Service Unavailable"]]
       end
 
       private
@@ -150,28 +153,48 @@ module Maptain
         # so a forged X-Forwarded-Host would get another host's file cached for this one.
         request_host = env["HTTP_HOST"].presence || env["SERVER_NAME"]
         request_host = request_host.to_s.downcase.sub(/:\d+\z/, "").delete_suffix(".")
-        targets.find { |target| URI(target.host).host&.downcase == request_host }&.name
+        targets.find { |target| URI(target.host).host.downcase == request_host }&.name
       end
 
+      # Refreshed by the first request past expiry; a request that finds another one reading the file for the first
+      # time reads it too rather than answer that it does not exist, and one that finds the storage unreachable
+      # with no copy at hand gets the error again until the next try.
       def cached_content(name)
-        cached, stale = @mutex.synchronize do
-          entry = (@cached_by_name[name] ||= Cached.new(nil, 0, false))
-          stale = !entry.refreshing && now >= entry.expires_at
-          entry.refreshing = true if stale
-          [entry, stale]
+        cached, action = @mutex.synchronize do
+          entry = (@cached_by_name[name] ||= Cached.new(nil, 0, false, nil))
+          if !entry.refreshing && now >= entry.expires_at
+            entry.refreshing = true
+            [entry, :refresh]
+          elsif entry.content.nil? && entry.refreshing
+            [entry, :read]
+          elsif entry.content.nil? && entry.error
+            [entry, :error]
+          else
+            [entry, :cached]
+          end
         end
-        stale ? refresh(cached, name) : cached.content
+        case action
+        when :refresh then refresh(cached, name)
+        when :read then Maptain.configuration.storage.read(name)
+        when :error then raise cached.error
+        else cached.content
+        end
       end
 
+      # A file not there yet, before the first build, is asked for again after RETRY_SECONDS, not TTL_SECONDS.
       def refresh(cached, name)
         content = Maptain.configuration.storage.read(name)
         @mutex.synchronize do
           cached.content = content
-          cached.expires_at = now + TTL_SECONDS
+          cached.error = nil
+          cached.expires_at = now + (content ? TTL_SECONDS : RETRY_SECONDS)
         end
         content
-      rescue # storage unreachable: the copy at hand is served on, and the storage asked again soon
-        @mutex.synchronize { cached.expires_at = now + RETRY_SECONDS }
+      rescue => error # storage unreachable: the copy at hand is served on, and the storage asked again soon
+        @mutex.synchronize do
+          cached.error = error
+          cached.expires_at = now + RETRY_SECONDS
+        end
         raise unless cached.content
 
         cached.content

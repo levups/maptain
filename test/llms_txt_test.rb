@@ -142,7 +142,8 @@ class LlmsTxtTest < MaptainTest
     end
     warnings = build.warnings
 
-    assert(warnings.any? { |warning| warning.source == "llms.txt" && warning.message.include?("201 links, more than 200") })
+    assert(warnings.any? { |warning| warning.source == "llms.txt" && warning.message.include?("more than 200 links") })
+    assert_equal 200, storage.content_by_name.fetch("llms.txt").scan(/^- /).size
     assert_equal 201, llms_txt_rows
   end
 
@@ -158,6 +159,49 @@ class LlmsTxtTest < MaptainTest
     build
 
     assert_includes storage.content_by_name.fetch("llms.txt"), "- [Post 251](https://example.com/en/posts/251)"
+  end
+
+  def test_reading_stops_at_max_records_with_a_warning
+    Post.insert_all((1..2_100).map { |id| {id:, title: "Post #{id}", languages: "fr", created_at: LONG_AGO, updated_at: LONG_AGO} })
+    create_post(2_101, languages: "en")
+    Maptain.configuration.sources = [source("AllPostSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      locales { |post| post.languages.split(",").map(&:to_sym) }
+      llms_txt("Posts") { |post| post.title }
+    end]
+    warnings = build.warnings
+
+    assert(warnings.any? { |warning| warning.source == "all_post" && warning.message.include?("read 2000 records") })
+    refute_includes storage.content_by_name.fetch("llms.txt"), "Post 2101"
+  end
+
+  def test_an_offset_scope_keeps_its_offset
+    (1..5).each { |id| create_post(id) }
+    Maptain.configuration.sources = [source("LatestPostSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      llms_txt("Posts", scope: -> { Post.order(:id).offset(3) }) { |post| post.title }
+    end]
+    build
+
+    assert_equal ["Post 4", "Post 5"], storage.content_by_name.fetch("llms.txt").scan(/\[(Post \d)\]/).flatten
+  end
+
+  def test_a_missing_translation_in_a_section_or_with_options_is_left_out
+    Maptain.configuration.sources = [source("TranslatedSitemap") do
+      scope { %i[about] }
+      url { |_page, locale| about_path(locale:) }
+      llms_txt(-> { I18n.t("sitemaps.pages") }) { "About" }
+    end, source("OptionsSitemap") do
+      scope { %i[about] }
+      url { |_page, locale| about_path(locale:) }
+      llms_txt("Pages") { I18n.t("pages.about", default: [:"pages.other"]) }
+    end]
+    build
+
+    refute_includes storage.content_by_name.fetch("llms.txt"), "Translation missing"
+    refute_includes storage.content_by_name.fetch("llms.txt"), "## "
   end
 
   def test_a_relation_with_a_join_is_ordered_without_ambiguity
@@ -288,6 +332,32 @@ class LlmsTxtTest < MaptainTest
     headers["x-request-id"] = "1"
 
     assert_equal 404, status
+  end
+
+  def test_the_app_answers_503_while_the_storage_is_unreachable_and_it_has_no_copy
+    storage.define_singleton_method(:read) { |_name| raise IOError, "unreachable" }
+    app = Maptain::LlmsTxt::App.new
+
+    assert_equal 503, app.call({}).first
+    assert_equal 503, app.call({}).first
+  end
+
+  def test_a_request_during_the_first_read_reads_the_file_too
+    create_post(1)
+    build
+    app = Maptain::LlmsTxt::App.new
+    app.instance_variable_get(:@cached_by_name)["llms.txt"] = Maptain::LlmsTxt::App::Cached.new(nil, 0, true, nil)
+    app.instance_variable_get(:@cached_by_name)["llms.txt"].expires_at = Float::INFINITY
+
+    assert_equal 200, app.call({}).first
+  end
+
+  def test_a_file_not_there_yet_is_asked_for_again_soon
+    app = Maptain::LlmsTxt::App.new
+    app.call({})
+
+    assert_operator app.instance_variable_get(:@cached_by_name).fetch("llms.txt").expires_at,
+      :<=, Process.clock_gettime(Process::CLOCK_MONOTONIC) + Maptain::LlmsTxt::App::RETRY_SECONDS
   end
 
   def test_the_app_reads_the_storage_once_per_ttl_and_serves_its_copy_when_the_storage_fails

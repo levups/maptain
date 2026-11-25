@@ -251,19 +251,27 @@ module Maptain
     def render_llms_txt(sources)
       llms_txt = @configuration.llms_txt
       llms_txt.targets(@configuration).to_h do |target|
-        entries = sources.flat_map { |source| source.llms_txt_entries(target.locale) }.uniq(&:url)
-        check_llms_txt(target.name, entries)
-        [target.name, llms_txt.render(entries, target.locale, target.host)]
+        location = "#{@configuration.sitemaps_url}/#{target.name}"
+        entries = sources.flat_map do |source|
+          source_entries, cut_short = source.llms_txt_entries(target.locale)
+          if cut_short
+            warn(source.slug, location, "read #{LlmsTxt::MAX_RECORDS} records without filling #{target.name}: " \
+              "give llms_txt a scope: with the records of its language")
+          end
+          source_entries
+        end.uniq(&:url)
+        check_llms_txt(target.name, location, entries)
+        [target.name, llms_txt.render(entries.first(LlmsTxt::MAX_LINKS), target.locale, target.host)]
       end
     end
 
-    # Each file is published when it differs from the last build's.
+    # Each file is published when it differs from the last build's, the new ones announced together.
     def publish_llms_txt(content_by_name)
+      changed = content_by_name.select { |name, content| @full || @previous.extras[name] != Digest::SHA256.hexdigest(content) }
+      announce_new_files(changed.keys)
       content_by_name.each do |name, content|
-        digest = Digest::SHA256.hexdigest(content)
-        @manifest.extras[name] = digest
-        if @full || @previous.extras[name] != digest
-          announce_new_files([name])
+        @manifest.extras[name] = Digest::SHA256.hexdigest(content)
+        if changed.key?(name)
           upload(name, content)
           @written << name
         else
@@ -272,15 +280,15 @@ module Maptain
       end
     end
 
-    def check_llms_txt(name, entries)
+    def check_llms_txt(name, location, entries)
       outside = entries.reject { |entry| on_host?(entry.url) }
       if outside.any?
         @warnings << Warning.new(source: name, url: outside.first.url, message: @outside_message, others: outside.size - 1)
       end
       return if entries.size <= LlmsTxt::MAX_LINKS
 
-      warn(name, "#{@configuration.sitemaps_url}/#{name}", "lists #{entries.size} links, more than " \
-        "#{LlmsTxt::MAX_LINKS}: give llms_txt a smaller scope")
+      warn(name, location, "has more than #{LlmsTxt::MAX_LINKS} links, the first #{LlmsTxt::MAX_LINKS} are " \
+        "listed: give llms_txt a smaller scope")
     end
 
     def upload(name, content)
