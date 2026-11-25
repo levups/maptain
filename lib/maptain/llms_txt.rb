@@ -15,8 +15,9 @@ module Maptain
     MAX_RECORDS = 2_000
     # What I18n.t gives for a key it does not have, unless told default: nil: "Translation missing: en.key" ("translation
     # missing" before i18n 1.13), or "Translation missing. Options considered were:" with a default list. A title that
-    # only starts with those words stays.
-    MISSING_TRANSLATION = /\Atranslation missing(?:: [^\s.]+\..+\z|\. Options considered were:)/i
+    # only starts with those words stays: the key begins with a locale in lowercase letters, maybe with a region or a
+    # script ("en.", "pt-BR.", "zh_Hant."), where "Dr. No" does not.
+    MISSING_TRANSLATION = /\Atranslation missing(?:: (?-i:[a-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*)\..+\z|\. Options considered were:)/i
 
     Entry = Data.define(:section, :title, :url, :notes)
     # A file to write: its name, its language and the host it is for.

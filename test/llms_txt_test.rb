@@ -510,6 +510,10 @@ class LlmsTxtTest < MaptainTest
     refute Maptain::LlmsTxt.present?("translation missing: en.llms_txt.title")
     refute Maptain::LlmsTxt.present?("Translation missing. Options considered were:\n- en.a\n- en.b")
     assert Maptain::LlmsTxt.present?("Translation missing in Safari: a fix")
+    assert Maptain::LlmsTxt.present?("Translation missing: Dr. No")
+    assert Maptain::LlmsTxt.present?("Translation Missing: St. Louis edition")
+    assert Maptain::LlmsTxt.present?("Translation missing: e.g. a novel")
+    refute Maptain::LlmsTxt.present?("Translation missing: zh_Hant.llms.titre_é")
     assert Maptain::LlmsTxt.present?("Translations")
   end
 
