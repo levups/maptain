@@ -206,7 +206,8 @@ Titles are cut at 100 characters, descriptions at 2,048.
 Google News reads articles of the last two days only, and 1,000 per file at most: a source with a `news` block gets
 files that hold no more. Give the articles a source of their own, scoped to those days: an article that leaves the
 scope changes the count of its file, which is rewritten without it. sitemap_generator's `publication_name:` and
-`publication_language:` are `name:` and `language:` here; any other key leaves the entry out with a warning.
+`publication_language:` are `name:` and `language:` here; any other key leaves the entry out with a warning. A
+video field Maptain does not write (`rating:`, `tag:`) is left out of its video, with a warning.
 
 ```ruby
 class NewsSitemap < Maptain::Source
@@ -303,8 +304,9 @@ index, a file that changed takes the latest `lastmod` it holds, or the time of t
 so that crawlers read it again.
 
 Some changes leave those numbers alone: `update_columns`, a change in another table that the `url`, `locales`,
-`images`, `video` or `news` blocks read, a new `url` block, a file someone removed from the storage. Name the other
-table in `fingerprint`, or `touch` the record from it. For the rest, a full build comes once a week by itself:
+`images`, `video` or `news` blocks read, a new `url`, `video` or `news` block, a file someone removed from the
+storage. Name the other table in `fingerprint`, or `touch` the record from it. For the rest, a full build comes
+once a week by itself:
 
 ```ruby
 config.rebuild_every = 1.day   # default: a week; nil leaves it to maptain:rebuild
@@ -437,6 +439,7 @@ It renders every sitemap without publishing or submitting anything, and fails on
   languages all share one URL;
 - an `hreflang` that is not a language code (`en`, `pt-BR`, `zh-Hant`, `es-419`);
 - a `lastmod` in the future, or one that is not a W3C date, which is then left out;
+- a video or a news entry left out, or a video field Maptain does not write;
 - an index with more than the 50,000 files it may hold.
 
 When many URLs of a source are outside the hosts of the site, listed twice, too long or dated in the future, one

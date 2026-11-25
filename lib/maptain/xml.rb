@@ -20,10 +20,15 @@ module Maptain
     MAX_VIDEO_TITLE_CHARACTERS = 100
     # What XML 1.0 forbids in text, tabs and line breaks aside.
     XML_FORBIDDEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/
-    # Chinese written in Traditional characters, by script or by region.
-    TRADITIONAL_CHINESE = %w[hant tw hk mo].freeze
+    # Regions that write Chinese in Traditional characters.
+    TRADITIONAL_CHINESE = %w[tw hk mo].freeze
     # https://developers.google.com/search/docs/crawling-indexing/sitemaps/news-sitemap
     NEWS_KEYS = %i[name language title publication_date].freeze
+    # Fields written as text, whatever the object: a title or a description may be an Action Text body.
+    VIDEO_TEXT = %i[title description].freeze
+    NEWS_TEXT = %i[name title language].freeze
+    # What Google News takes as a language.
+    NEWS_LANGUAGE = /\A(?:[a-z]{2,3}|zh-cn|zh-tw)\z/
     # Google reads no more than 1,000 news entries per file.
     MAX_NEWS_PER_FILE = 1_000
     # https://www.w3.org/TR/NOTE-datetime: a year, a month, a day, or a time with its zone.
@@ -37,7 +42,8 @@ module Maptain
 
     # One <url> per language. Each lists every language of the page, itself included: search engines drop
     # hreflang links that are not returned by the page they point to.
-    # Videos and news, written in each language, close the <url> of their language.
+    # Videos and news, written in each language, close the <url> of their language; languages that share a URL
+    # write the media of the first of them that has some.
     def url_entries(page, x_default:)
       shared = "#{lastmod_tag(page.lastmod)}#{alternates(page, x_default)}#{images(page.images)}"
       if page.media_by_locale.empty?
@@ -45,25 +51,28 @@ module Maptain
         return page.urls.map { |url| "<url><loc>#{escape(url)}</loc>#{shared}" }
       end
 
-      entries = page.url_by_locale.uniq { |_hreflang, url| url }
-      entries.map! { |hreflang, url| "<url><loc>#{escape(url)}</loc>#{shared}#{page.media_by_locale[hreflang]}</url>\n" }
+      page.url_by_locale.group_by { |_hreflang, url| url }.map do |url, pairs|
+        media = pairs.lazy.filter_map { |hreflang, _url| page.media_by_locale[hreflang] }.first
+        "<url><loc>#{escape(url)}</loc>#{shared}#{media}</url>\n"
+      end
     end
 
-    # A <video:video>, or the reason it cannot be one. Locations are absolute already; page_url is the <loc>, which
-    # a player or content location must not be. Tags in the order of the sitemap-video/1.1 schema.
+    # A <video:video> and what was left out of it, or nil and the reason it cannot be one. Locations are absolute
+    # already; page_url is the <loc>, which a player or content location must not be. Fields Maptain does not
+    # write are left out of the video, not the video. Tags in the order of the sitemap-video/1.1 schema.
     def video(fields, page_url)
-      unknown = fields.keys - VIDEO_KEYS
-      return [nil, "has a video with #{unknown.first.inspect}, not one of #{VIDEO_KEYS.join(", ")}"] if unknown.any?
-
-      fields = fields.transform_values { |value| value.is_a?(String) ? text(value).presence : value }
-      missing = %i[thumbnail_loc title description].reject { |key| fields[key].present? }
+      ignored = fields.keys - VIDEO_KEYS
+      fields = cleaned(fields.slice(*VIDEO_KEYS), VIDEO_TEXT)
+      missing = %i[thumbnail_loc title description].reject { |key| fields[key] }
       missing << :player_loc unless fields[:content_loc] || fields[:player_loc]
       return [nil, "has a video without #{missing.first}, left out"] if missing.any?
-      return [nil, "has a video whose player_loc or content_loc is the page itself, left out"] if [fields[:player_loc], fields[:content_loc]].include?(page_url)
+      if [fields[:player_loc], fields[:content_loc]].include?(page_url)
+        return [nil, "has a video whose player_loc or content_loc is the page itself, left out"]
+      end
 
-      duration = fields[:duration] && Integer(fields[:duration], exception: false)
+      duration = fields[:duration] && whole_number(fields[:duration])
       if fields[:duration] && !duration&.between?(1, MAX_VIDEO_DURATION_SECONDS)
-        return [nil, "has a video lasting #{fields[:duration].inspect} seconds, not 1 to #{MAX_VIDEO_DURATION_SECONDS}, left out"]
+        return [nil, "has a video whose duration is not 1 to #{MAX_VIDEO_DURATION_SECONDS} seconds (#{fields[:duration].inspect}), left out"]
       end
 
       dates = %i[expiration_date publication_date].to_h { |key| [key, fields[key] && full_date(fields[key])] }
@@ -71,37 +80,66 @@ module Maptain
       return [nil, "has a video #{rejected.first} that is not a full W3C date (#{fields[rejected.first].inspect}), left out"] if rejected
 
       tags = "<video:thumbnail_loc>#{escape(fields[:thumbnail_loc])}</video:thumbnail_loc>" \
-        "<video:title>#{escape(fields[:title][0, MAX_VIDEO_TITLE_CHARACTERS])}</video:title>" \
-        "<video:description>#{escape(fields[:description][0, MAX_VIDEO_DESCRIPTION_CHARACTERS])}</video:description>"
+        "<video:title>#{escape(cut(fields[:title], MAX_VIDEO_TITLE_CHARACTERS))}</video:title>" \
+        "<video:description>#{escape(cut(fields[:description], MAX_VIDEO_DESCRIPTION_CHARACTERS))}</video:description>"
       tags << "<video:content_loc>#{escape(fields[:content_loc])}</video:content_loc>" if fields[:content_loc]
       tags << "<video:player_loc>#{escape(fields[:player_loc])}</video:player_loc>" if fields[:player_loc]
       tags << "<video:duration>#{duration}</video:duration>" if duration
       dates.each { |key, stamp| tags << "<video:#{key}>#{escape(stamp)}</video:#{key}>" if stamp }
-      ["<video:video>#{tags}</video:video>", nil]
+      reason = "has a video with #{ignored.map(&:inspect).join(", ")}, not written (only #{VIDEO_KEYS.join(", ")})" if ignored.any?
+      ["<video:video>#{tags}</video:video>", reason]
     end
 
-    # A <news:news>, or the reason it cannot be one. language: the page's when not given, spelled as Google wants.
+    # A <news:news>, or nil and the reason it cannot be one. language: the page's when not given, spelled as Google
+    # wants.
     def news(fields, hreflang)
       unknown = fields.keys - NEWS_KEYS
-      return [nil, "has news with #{unknown.first.inspect}, not one of #{NEWS_KEYS.join(", ")}"] if unknown.any?
+      return [nil, "has news with #{unknown.first.inspect}, not one of #{NEWS_KEYS.join(", ")}, left out"] if unknown.any?
 
-      fields = fields.transform_values { |value| value.is_a?(String) ? text(value).presence : value }
-      missing = %i[name title publication_date].reject { |key| fields[key].present? }
+      fields = cleaned(fields, NEWS_TEXT)
+      missing = %i[name title publication_date].reject { |key| fields[key] }
       return [nil, "has news without #{missing.first}, left out"] if missing.any?
 
       published = full_date(fields[:publication_date])
       return [nil, "has news whose publication_date is not a full W3C date (#{fields[:publication_date].inspect}), left out"] unless published
 
       language = news_language(hreflang(fields[:language] || hreflang))
+      return [nil, "has news whose language is not a language code (#{fields[:language].inspect}), left out"] unless language.match?(NEWS_LANGUAGE)
+
       ["<news:news><news:publication><news:name>#{escape(fields[:name])}</news:name>" \
         "<news:language>#{escape(language)}</news:language></news:publication>" \
         "<news:publication_date>#{escape(published)}</news:publication_date>" \
         "<news:title>#{escape(fields[:title])}</news:title></news:news>", nil]
     end
 
-    # Text XML 1.0 can hold: valid UTF-8, without the control characters it forbids, on its own lines trimmed.
+    # The fields with their text ones as text and every blank one gone: a String, an Action Text body or a number
+    # alike.
+    def cleaned(fields, text_keys)
+      fields.to_h do |key, value|
+        [key, (text_keys.include?(key) || value.is_a?(String)) ? text(value).presence : value]
+      end.compact
+    end
+
+    # Text XML 1.0 can hold: UTF-8 whatever the String's encoding, without invalid bytes or the control characters
+    # XML forbids, trimmed.
     def text(value)
-      value.to_s.scrub("").gsub(XML_FORBIDDEN, "").strip
+      string = value.to_s
+      string = (string.encoding == Encoding::BINARY) ? string.dup.force_encoding(Encoding::UTF_8) : string.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: "")
+      string.scrub("").gsub(XML_FORBIDDEN, "").strip
+    end
+
+    # At most limit characters as a reader counts them: an accent stays with its letter.
+    def cut(text, limit)
+      (text.length > limit) ? text.grapheme_clusters.first(limit).join : text
+    end
+
+    # An Integer, a whole Float, or a String of decimal digits, as an Integer; nil for anything else.
+    def whole_number(value)
+      case value
+      when Integer then value
+      when Float then value.to_i if value.finite? && value == value.to_i
+      when String then Integer(value, 10, exception: false)
+      end
     end
 
     # A W3C date with at least its day, as the video and news schemas want, or nil.
@@ -110,11 +148,12 @@ module Maptain
       stamp if stamp&.match?(/\A\d{4}-\d{2}-\d{2}/)
     end
 
-    # Google News takes ISO 639 codes, and zh-cn or zh-tw for Chinese: Simplified or Traditional, by script or by
-    # region.
+    # Google News takes ISO 639 codes, and zh-cn or zh-tw for Chinese: the script decides, else the region.
     def news_language(hreflang)
       language, *subtags = hreflang.downcase.split("-")
-      return language unless language == "zh" && subtags.any?
+      return language unless language == "zh"
+      return "zh-tw" if subtags.include?("hant")
+      return "zh-cn" if subtags.include?("hans")
 
       (subtags & TRADITIONAL_CHINESE).any? ? "zh-tw" : "zh-cn"
     end
