@@ -21,11 +21,14 @@ module Maptain
     UNSAFE = "[^#{URL_CHARACTERS}]|%(?![0-9A-Fa-f]{2})"
     UNSAFE_CHARACTER = Regexp.new(UNSAFE)
     UNSAFE_BYTE = Regexp.new(UNSAFE, Regexp::NOENCODING)
+    # Records loaded at once for the llms.txt: one more than it may list.
+    LLMS_TXT_BATCH_RECORDS = 201
 
     class << self
       def inherited(subclass)
         super
-        subclass.instance_variable_set(:@definitions, definitions.dup)
+        # A subclass lists its own records in the llms.txt, or none: inherited, the same links would come twice.
+        subclass.instance_variable_set(:@definitions, definitions.except(:llms_txt))
       end
 
       def definitions
@@ -69,6 +72,15 @@ module Maptain
       # How many consecutive ids share a file.
       def shard_size(count)
         definitions[:shard_size] = Integer(count)
+      end
+
+      # Lists records in the llms.txt of the site, under a heading: the records of `scope`, by default all of
+      # the source's, each with the title and notes the block returns ([title, notes], or a title alone).
+      def llms_txt(section, scope: nil, &entry)
+        raise SourceError, "#{name}.llms_txt needs a block returning the title of a record" unless entry
+        raise SourceError, "#{name}.llms_txt scope: must be a lambda, such as -> { Product.featured }" if scope && !scope.respond_to?(:call)
+
+        definitions[:llms_txt] = {section:, scope:, entry:}
       end
 
       def slug(name = nil)
@@ -123,7 +135,78 @@ module Maptain
       (shard == WHOLE) ? prefix : "#{prefix}-#{shard.rjust(5, "0")}"
     end
 
+    # The links this source adds to the llms.txt, in one language, and whether reading stopped at
+    # LlmsTxt::MAX_RECORDS before the file was full. A record that does not exist in that language, or whose title
+    # is blank or a missing translation, is left out. Its blocks, scope included, run in that language.
+    # seen_urls: the URLs the file lists already, from earlier sources; a URL listed again is skipped, not counted.
+    def llms_txt_entries(locale, seen_urls = Set.new)
+      definition = definitions[:llms_txt]
+      return [[], false] unless definition
+
+      hreflang = Xml.hreflang(locale)
+      speaking(locale) do
+        given = definition[:section]
+        section = given.respond_to?(:call) ? instance_exec(&given) : given
+        next [[], false] unless LlmsTxt.present?(section)
+
+        entries = []
+        read = 0
+        cut_short = false
+        each_llms_txt_record(definition[:scope]) do |record|
+          # A record past MAX_RECORDS is not read: it only tells that some were left.
+          if (read += 1) > LlmsTxt::MAX_RECORDS
+            cut_short = true
+            break
+          end
+          # Spelled as the record's languages spell it, as the sitemap does.
+          record_locale = locales_of(record).find { |candidate| Xml.hreflang(candidate) == hreflang }
+          url = record_locale && url_by_locale_of(record, [record_locale])[hreflang]
+          next unless url && !seen_urls.include?(url)
+
+          title, notes = speaking(locale) { Array(instance_exec(record, &definition[:entry])) }
+          next unless LlmsTxt.present?(title)
+
+          seen_urls << url
+          entries << LlmsTxt::Entry.new(section:, title:, url:, notes:)
+          # One more than the file may list, for the build to warn about it.
+          break if entries.size > LlmsTxt::MAX_LINKS
+        end
+        [entries, cut_short]
+      end
+    end
+
+    def llms_txt?
+      definitions.key?(:llms_txt)
+    end
+
     private
+
+    # The records of the llms.txt, until the caller has enough: in batches of ids for a relation that names no
+    # order, limit or offset, so that the file does not change with the database's order; otherwise as the relation
+    # says, in one query of at most MAX_RECORDS + 1 rows: paging it would skip rows where its order has ties.
+    def each_llms_txt_record(scope, &block)
+      records = scope ? instance_exec(&scope) : relation
+      return records.each(&block) unless records.respond_to?(:find_each) && records.respond_to?(:order_values)
+      return records.find_each(batch_size: LLMS_TXT_BATCH_RECORDS, &block) if records.order_values.empty? && !records.limit_value && !records.offset_value
+
+      records.limit([records.limit_value, LlmsTxt::MAX_RECORDS + 1].compact.min).each(&block)
+    end
+
+    def locales_of(record)
+      definitions[:locales] ? Array(instance_exec(record, &definitions[:locales])) : configuration.locales
+    end
+
+    # Runs a block with the host and I18n locale of a language, as the url block gets them.
+    def speaking(locale)
+      app_locale = I18n.locale
+      outer_host = @language_host
+      _hreflang, @language_host, i18n_locale = language_for(locale)
+      I18n.locale = i18n_locale || app_locale
+      yield
+    ensure
+      @language_host = outer_host
+      I18n.locale = app_locale
+    end
 
     def definitions
       self.class.definitions
@@ -149,7 +232,7 @@ module Maptain
     end
 
     def page_for(record)
-      locales = definitions[:locales] ? Array(instance_exec(record, &definitions[:locales])) : configuration.locales
+      locales = locales_of(record)
       given_lastmod = lastmod_of(record)
       lastmod = Xml.timestamp(given_lastmod)
       Page.new(url_by_locale: url_by_locale_of(record, locales), lastmod:, modified_at: lastmod && Xml.time(lastmod),
@@ -161,6 +244,7 @@ module Maptain
     # I18n may refuse, runs in the app's. Set per URL and restored per page: I18n.with_locale costs twice as much.
     def url_by_locale_of(record, locales)
       app_locale = I18n.locale
+      outer_host = @language_host
       locales.filter_map do |locale|
         hreflang, @language_host, i18n_locale = language_for(locale)
         I18n.locale = i18n_locale || app_locale
@@ -168,7 +252,7 @@ module Maptain
         [hreflang, absolute(location)] if location
       end.to_h
     ensure
-      @language_host = nil
+      @language_host = outer_host
       I18n.locale = app_locale
     end
 

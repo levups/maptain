@@ -337,6 +337,55 @@ A refusal or an endpoint that cannot be reached is a warning, never a failed bui
 kept in the manifest and sent again with the next build. Once the endpoint cannot be reached, a build asks it
 nothing more.
 
+## llms.txt
+
+An [llms.txt](https://llmstxt.org) is a short Markdown summary of a site for language models: its name, a line
+about it, then a few lists of links to the pages that matter most. Maptain writes it with the sitemaps, from the
+same sources, when you give it a title:
+
+```ruby
+config.llms_txt = {
+  title: "Example Store",
+  summary: -> { I18n.t("llms_txt.summary") },   # a String, or a block run in the language of the file
+  details: "Prices include VAT. We ship to the EU.",
+  locale: :en                                     # default: config.x_default, else the first language
+}
+```
+
+A source joins it with a heading and, for each record, a title and optional notes. Keep it to the pages a reader
+would start from: past 200 links a build warns, since the file is no longer a summary.
+
+```ruby
+class CategorySitemap < Maptain::Source
+  scope { Category.all }
+  url { |category, locale| category_url(category, locale:) }
+  llms_txt("Categories", scope: -> { Category.top_level }) { |category| [category.name, category.tagline] }
+end
+```
+
+Its links come from the `url` block, in the language of the file, where the `scope:` and title blocks run too.
+Records that do not exist in that language, or whose title is blank or a missing translation, are left out.
+Records are read in id order until the file is full, a scope with its own order, limit or offset as it says, and
+never more than 2,000 per source and file: past that a build warns, and `scope:` should pick the records of the file's
+language. The first 200 links are listed. A subclass does not inherit its parent's `llms_txt`. The file is
+`llms.txt`, next to `sitemap.xml`, rewritten only when it changes, and deleted when the setting goes away.
+
+With one host per language (`config.host_by_locale`), each host gets a file of its own, in its language and with
+links to its pages: `llms-en.txt`, `llms-de.txt`. A host with several languages gets the one of `locale:` if it has
+it, else `x_default`, else its first.
+
+Crawlers look for the file at `/llms.txt` on each host. When the sitemaps are served from the site on one host,
+`public/llms.txt` is that already. Otherwise, with the sitemaps elsewhere (`config.sitemaps_url`) or one host per
+language, serve it from the app, which reads from `config.storage` the file of the host it is asked on:
+
+```ruby
+# config/routes.rb
+get "llms.txt", to: Maptain::LlmsTxt::App.new
+```
+
+It picks the file from the `Host` header, never from `X-Forwarded-Host`, which a cache does not key responses by:
+behind a proxy, pass the original `Host` on.
+
 ## Checking
 
 ```sh
@@ -360,7 +409,8 @@ Console reports, from the visits crawlers make anyway.
 ## Instrumentation
 
 `build.maptain` wraps a build, with `full` and `result` in its payload; `shard.maptain` wraps each file
-range it renders, with `source` and `shard`.
+range it renders, with `source` and `shard`. `storage_error.maptain`, with `name` and `exception_object`, reports a
+storage `LlmsTxt::App` could not read: it answers with its copy, or a 503 without one.
 
 ```ruby
 ActiveSupport::Notifications.subscribe("build.maptain") do |event|
@@ -619,6 +669,42 @@ With one host per language, every host must serve the key: IndexNow reads it on 
 
 A refusal or an endpoint that cannot be reached is a warning, never a failed build: the URLs it did not take are kept in the manifest and sent again with the next build. Once the endpoint cannot be reached, a build asks it nothing more.
 
+### llms.txt
+
+An [llms.txt](https://llmstxt.org) is a short Markdown summary of a site for language models: its name, a line about it, then a few lists of links to the pages that matter most. Maptain writes it with the sitemaps, from the same sources, when you give it a title:
+
+```ruby
+config.llms_txt = {
+  title: "Example Store",
+  summary: -> { I18n.t("llms_txt.summary") },   # a String, or a block run in the language of the file
+  details: "Prices include VAT. We ship to the EU.",
+  locale: :en                                     # default: config.x_default, else the first language
+}
+```
+
+A source joins it with a heading and, for each record, a title and optional notes. Keep it to the pages a reader would start from: past 200 links a build warns, since the file is no longer a summary.
+
+```ruby
+class CategorySitemap < Maptain::Source
+  scope { Category.all }
+  url { |category, locale| category_url(category, locale:) }
+  llms_txt("Categories", scope: -> { Category.top_level }) { |category| [category.name, category.tagline] }
+end
+```
+
+Its links come from the `url` block, in the language of the file, where the `scope:` and title blocks run too. Records that do not exist in that language, or whose title is blank or a missing translation, are left out. Records are read in id order until the file is full, a scope with its own order, limit or offset as it says, and never more than 2,000 per source and file: past that a build warns, and `scope:` should pick the records of the file's language. The first 200 links are listed. A subclass does not inherit its parent's `llms_txt`. The file is `llms.txt`, next to `sitemap.xml`, rewritten only when it changes, and deleted when the setting goes away.
+
+With one host per language (`config.host_by_locale`), each host gets a file of its own, in its language and with links to its pages: `llms-en.txt`, `llms-de.txt`. A host with several languages gets the one of `locale:` if it has it, else `x_default`, else its first.
+
+Crawlers look for the file at `/llms.txt` on each host. When the sitemaps are served from the site on one host, `public/llms.txt` is that already. Otherwise, with the sitemaps elsewhere (`config.sitemaps_url`) or one host per language, serve it from the app, which reads from `config.storage` the file of the host it is asked on:
+
+```ruby
+# config/routes.rb
+get "llms.txt", to: Maptain::LlmsTxt::App.new
+```
+
+It picks the file from the `Host` header, never from `X-Forwarded-Host`, which a cache does not key responses by: behind a proxy, pass the original `Host` on.
+
 ### Checking
 
 ```sh
@@ -638,7 +724,7 @@ Maptain never requests a page of the site. Whether a URL answers 200 or carries 
 
 ### Instrumentation
 
-`build.maptain` wraps a build, with `full` and `result` in its payload. `shard.maptain` wraps each range it renders, with `source` and `shard`.
+`build.maptain` wraps a build, with `full` and `result` in its payload. `shard.maptain` wraps each range it renders, with `source` and `shard`. `storage_error.maptain`, with `name` and `exception_object`, reports a storage `LlmsTxt::App` could not read: it answers with its copy, or a 503 without one.
 
 ```ruby
 ActiveSupport::Notifications.subscribe("build.maptain") do |event|

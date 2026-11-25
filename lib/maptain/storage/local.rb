@@ -3,7 +3,7 @@
 module Maptain
   module Storage
     CONTENT_TYPE_BY_EXTENSION = {
-      ".gz" => "application/gzip", ".json" => "application/json", ".txt" => "text/plain", ".xml" => "application/xml"
+      ".gz" => "application/gzip", ".json" => "application/json", ".txt" => "text/plain; charset=utf-8", ".xml" => "application/xml"
     }.freeze
 
     class Local

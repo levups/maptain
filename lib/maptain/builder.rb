@@ -74,10 +74,18 @@ module Maptain
       @diffing = @tracking && @previous.digest == @configuration.digest
       @moved_sources = Set.new
 
-      @configuration.sources.each { |source_class| build_source(source_class.new(@configuration)) }
+      llms_txt_sources = []
+      @configuration.sources.each do |source_class|
+        source = source_class.new(@configuration)
+        build_source(source)
+        llms_txt_sources << source if @configuration.llms_txt && source.llms_txt?
+      end
+      # Rendered before anything is published: a block that raises stops the build before it changes the storage.
+      llms_txt_by_name = render_llms_txt(llms_txt_sources) if @configuration.llms_txt
       publish_rendered
       publish_index
-      deleted = (@previous.file_names | @previous.pending) - @manifest.file_names
+      publish_llms_txt(llms_txt_by_name) if llms_txt_by_name
+      deleted = (@previous.file_names | @previous.pending | @previous.extras.keys) - @manifest.file_names - @manifest.extras.keys
       @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) })) if @diffing
       deleted.each { |name| @storage.delete(name) }
       publish_index_now_key
@@ -183,7 +191,7 @@ module Maptain
 
     # Recorded before the first upload, so that a build dying midway leaves no file the next one cannot remove.
     def announce_new_files(names)
-      new_names = names.to_a - @previous_file_by_name.keys - @previous.pending
+      new_names = names.to_a - @previous_file_by_name.keys - @previous.pending - @previous.extras.keys
       return if new_names.empty?
 
       @previous.pending.concat(new_names)
@@ -235,6 +243,53 @@ module Maptain
       end
       inspect_index("#{@configuration.sitemaps_url}/#{name}", entries.size)
       upload(name, "#{Xml::INDEX_OPEN}#{entries.join}#{Xml::INDEX_CLOSE}")
+    end
+
+    # One file per host, rendered at each build from a handful of records, by name. A link listed twice is kept
+    # once; one outside the site is a warning, and so is a file past MAX_LINKS, which a model no longer reads as a
+    # summary.
+    def render_llms_txt(sources)
+      llms_txt = @configuration.llms_txt
+      llms_txt.targets(@configuration).to_h do |target|
+        location = "#{@configuration.sitemaps_url}/#{target.name}"
+        seen_urls = Set.new
+        entries = sources.flat_map do |source|
+          source_entries, cut_short = source.llms_txt_entries(target.locale, seen_urls)
+          if cut_short
+            warn(source.slug, location, "read #{LlmsTxt::MAX_RECORDS} records without filling #{target.name}: " \
+              "give its llms_txt a scope: with the records of that language")
+          end
+          source_entries
+        end
+        check_llms_txt(target.name, location, entries)
+        [target.name, llms_txt.render(entries.first(LlmsTxt::MAX_LINKS), target.locale, target.host)]
+      end
+    end
+
+    # Each file is published when it differs from the last build's, the new ones announced together.
+    def publish_llms_txt(content_by_name)
+      changed = content_by_name.select { |name, content| @full || @previous.extras[name] != Digest::SHA256.hexdigest(content) }
+      announce_new_files(changed.keys)
+      content_by_name.each do |name, content|
+        @manifest.extras[name] = Digest::SHA256.hexdigest(content)
+        if changed.key?(name)
+          upload(name, content)
+          @written << name
+        else
+          @kept << name
+        end
+      end
+    end
+
+    def check_llms_txt(name, location, entries)
+      outside = entries.reject { |entry| on_host?(entry.url) }
+      if outside.any?
+        @warnings << Warning.new(source: name, url: outside.first.url, message: @outside_message, others: outside.size - 1)
+      end
+      return if entries.size <= LlmsTxt::MAX_LINKS
+
+      warn(name, location, "has more than #{LlmsTxt::MAX_LINKS} links, the first #{LlmsTxt::MAX_LINKS} are " \
+        "listed: give llms_txt a smaller scope")
     end
 
     def upload(name, content)

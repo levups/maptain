@@ -26,6 +26,7 @@ require_relative "maptain/source"
 require_relative "maptain/shard_writer"
 require_relative "maptain/manifest"
 require_relative "maptain/index_now"
+require_relative "maptain/llms_txt"
 require_relative "maptain/builder"
 require_relative "maptain/railtie" if defined?(Rails::Railtie)
 

@@ -42,6 +42,7 @@
         <li><a href="#building">Building</a></li>
         <li><a href="#storage">Storage</a></li>
         <li><a href="#indexnow">IndexNow</a></li>
+        <li><a href="#llms-txt">llms.txt</a></li>
         <li><a href="#checking">Checking</a></li>
         <li><a href="#instrumentation">Instrumentation</a></li>
         <li><a href="#migrating">Coming from sitemap_generator</a></li>
@@ -223,6 +224,31 @@ bin/rails maptain:rebuild   <span class="c"># rewrite everything</span></code></
       </div>
     </section>
 
+    <section id="llms-txt" aria-labelledby="llms-txt-title">
+      <h2 id="llms-txt-title">llms.txt</h2>
+      <div class="prose">
+        <p>An <a href="https://llmstxt.org">llms.txt</a> is a short Markdown summary of a site for language models: its name, a line about it, then a few lists of links to the pages that matter most. Maptain writes it with the sitemaps, from the same sources, when you give it a title:</p>
+<pre><code class="language-ruby"><span class="n">config</span><span class="p">.</span><span class="nf">llms_txt</span> <span class="o">=</span> <span class="p">{</span>
+  <span class="ss">title: </span><span class="s2">"Example Store"</span><span class="p">,</span>
+  <span class="ss">summary: </span><span class="o">-&gt;</span> <span class="p">{</span> <span class="no">I18n</span><span class="p">.</span><span class="nf">t</span><span class="p">(</span><span class="s2">"llms_txt.summary"</span><span class="p">)</span> <span class="p">},</span>   <span class="c1"># a String, or a block run in the language of the file</span>
+  <span class="ss">details: </span><span class="s2">"Prices include VAT. We ship to the EU."</span><span class="p">,</span>
+  <span class="ss">locale: :en</span>                                     <span class="c1"># default: config.x_default, else the first language</span>
+<span class="p">}</span></code></pre>
+        <p>A source joins it with a heading and, for each record, a title and optional notes. Keep it to the pages a reader would start from: past 200 links a build warns, since the file is no longer a summary.</p>
+<pre><code class="language-ruby"><span class="k">class</span> <span class="nc">CategorySitemap</span> <span class="o">&lt;</span> <span class="no">Maptain</span><span class="o">::</span><span class="no">Source</span>
+  <span class="n">scope</span> <span class="p">{</span> <span class="no">Category</span><span class="p">.</span><span class="nf">all</span> <span class="p">}</span>
+  <span class="n">url</span> <span class="p">{</span> <span class="o">|</span><span class="n">category</span><span class="p">,</span> <span class="n">locale</span><span class="o">|</span> <span class="n">category_url</span><span class="p">(</span><span class="n">category</span><span class="p">,</span> <span class="n">locale</span><span class="p">:)</span> <span class="p">}</span>
+  <span class="n">llms_txt</span><span class="p">(</span><span class="s2">"Categories"</span><span class="p">,</span> <span class="ss">scope: </span><span class="o">-&gt;</span> <span class="p">{</span> <span class="no">Category</span><span class="p">.</span><span class="nf">top_level</span> <span class="p">})</span> <span class="p">{</span> <span class="o">|</span><span class="n">category</span><span class="o">|</span> <span class="p">[</span><span class="n">category</span><span class="p">.</span><span class="nf">name</span><span class="p">,</span> <span class="n">category</span><span class="p">.</span><span class="nf">tagline</span><span class="p">]</span> <span class="p">}</span>
+<span class="k">end</span></code></pre>
+        <p>Its links come from the <code>url</code> block, in the language of the file, where the <code>scope:</code> and title blocks run too. Records that do not exist in that language, or whose title is blank or a missing translation, are left out. Records are read in id order until the file is full, a scope with its own order, limit or offset as it says, and never more than 2,000 per source and file: past that a build warns, and <code>scope:</code> should pick the records of the file's language. The first 200 links are listed. A subclass does not inherit its parent's <code>llms_txt</code>. The file is <code>llms.txt</code>, next to <code>sitemap.xml</code>, rewritten only when it changes, and deleted when the setting goes away.</p>
+        <p>With one host per language (<code>config.host_by_locale</code>), each host gets a file of its own, in its language and with links to its pages: <code>llms-en.txt</code>, <code>llms-de.txt</code>. A host with several languages gets the one of <code>locale:</code> if it has it, else <code>x_default</code>, else its first.</p>
+        <p>Crawlers look for the file at <code>/llms.txt</code> on each host. When the sitemaps are served from the site on one host, <code>public/llms.txt</code> is that already. Otherwise, with the sitemaps elsewhere (<code>config.sitemaps_url</code>) or one host per language, serve it from the app, which reads from <code>config.storage</code> the file of the host it is asked on:</p>
+<pre><code class="language-ruby"><span class="c1"># config/routes.rb</span>
+<span class="n">get</span> <span class="s2">"llms.txt"</span><span class="p">,</span> <span class="ss">to: </span><span class="no">Maptain</span><span class="o">::</span><span class="no">LlmsTxt</span><span class="o">::</span><span class="no">App</span><span class="p">.</span><span class="nf">new</span></code></pre>
+        <p>It picks the file from the <code>Host</code> header, never from <code>X-Forwarded-Host</code>, which a cache does not key responses by: behind a proxy, pass the original <code>Host</code> on.</p>
+      </div>
+    </section>
+
     <section id="checking" aria-labelledby="checking-title">
       <h2 id="checking-title">Checking</h2>
       <div class="prose">
@@ -242,7 +268,7 @@ bin/rails maptain:rebuild   <span class="c"># rewrite everything</span></code></
     <section id="instrumentation" aria-labelledby="instrumentation-title">
       <h2 id="instrumentation-title">Instrumentation</h2>
       <div class="prose">
-        <p><code>build.maptain</code> wraps a build, with <code>full</code> and <code>result</code> in its payload. <code>shard.maptain</code> wraps each range it renders, with <code>source</code> and <code>shard</code>.</p>
+        <p><code>build.maptain</code> wraps a build, with <code>full</code> and <code>result</code> in its payload. <code>shard.maptain</code> wraps each range it renders, with <code>source</code> and <code>shard</code>. <code>storage_error.maptain</code>, with <code>name</code> and <code>exception_object</code>, reports a storage <code>LlmsTxt::App</code> could not read: it answers with its copy, or a 503 without one.</p>
 <pre><code class="language-ruby"><span class="no">ActiveSupport</span><span class="o">::</span><span class="no">Notifications</span><span class="p">.</span><span class="nf">subscribe</span><span class="p">(</span><span class="s2">"build.maptain"</span><span class="p">)</span> <span class="k">do</span> <span class="o">|</span><span class="n">event</span><span class="o">|</span>
   <span class="n">built</span> <span class="o">=</span> <span class="n">event</span><span class="p">.</span><span class="nf">payload</span><span class="p">[</span><span class="ss">:result</span><span class="p">]</span>
   <span class="no">Rails</span><span class="p">.</span><span class="nf">logger</span><span class="p">.</span><span class="nf">info</span> <span class="s2">"Sitemap: </span><span class="si">#{</span><span class="n">built</span><span class="p">.</span><span class="nf">written</span><span class="p">.</span><span class="nf">size</span><span class="si">}</span><span class="s2"> files written in </span><span class="si">#{</span><span class="n">event</span><span class="p">.</span><span class="nf">duration</span><span class="p">.</span><span class="nf">round</span><span class="si">}</span><span class="s2"> ms"</span>

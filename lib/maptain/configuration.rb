@@ -7,7 +7,7 @@ module Maptain
     DEFAULT_REBUILD_EVERY_SECONDS = 7 * 24 * 60 * 60
 
     attr_accessor :filename, :load_sources, :rebuild_every, :storage, :x_default
-    attr_reader :host, :host_by_locale, :index_now_key, :index_now_key_location
+    attr_reader :host, :host_by_locale, :index_now_key, :index_now_key_location, :llms_txt
     attr_writer :locales, :sitemaps_url, :sources
 
     def initialize
@@ -41,8 +41,9 @@ module Maptain
       [host!, *host_by_locale.values].uniq
     end
 
-    # Checked when a build starts, not when host_by_locale is set: locales may be set after it.
+    # Checked when a build starts, not when host_by_locale or llms_txt is set: locales may be set after them.
     def validate!
+      llms_txt&.locale_in(self)
       hreflangs = locales.map { |locale| Xml.hreflang(locale) }
       unknown = host_by_locale.keys - hreflangs
       return if unknown.empty?
@@ -63,6 +64,13 @@ module Maptain
       end
 
       @index_now_key_location = path
+    end
+
+    # The llms.txt of the site: {title:, summary:, details:, locale:}, String keys too, or nil or false for none.
+    def llms_txt=(options)
+      @llms_txt = (LlmsTxt.new(**options.to_h.transform_keys(&:to_sym)) if options)
+    rescue ArgumentError => exception
+      raise ConfigurationError, "llms_txt: #{exception.message}, it takes title:, summary:, details: and locale:"
     end
 
     def locales
