@@ -409,7 +409,8 @@ Console reports, from the visits crawlers make anyway.
 ## Instrumentation
 
 `build.maptain` wraps a build, with `full` and `result` in its payload; `shard.maptain` wraps each file
-range it renders, with `source` and `shard`.
+range it renders, with `source` and `shard`. `storage_error.maptain`, with `name` and `exception`, reports a
+storage `LlmsTxt::App` could not read, which it answers with a 503.
 
 ```ruby
 ActiveSupport::Notifications.subscribe("build.maptain") do |event|
@@ -723,7 +724,7 @@ Maptain never requests a page of the site. Whether a URL answers 200 or carries 
 
 ### Instrumentation
 
-`build.maptain` wraps a build, with `full` and `result` in its payload. `shard.maptain` wraps each range it renders, with `source` and `shard`.
+`build.maptain` wraps a build, with `full` and `result` in its payload. `shard.maptain` wraps each range it renders, with `source` and `shard`. `storage_error.maptain`, with `name` and `exception`, reports a storage `LlmsTxt::App` could not read, which it answers with a 503.
 
 ```ruby
 ActiveSupport::Notifications.subscribe("build.maptain") do |event|

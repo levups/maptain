@@ -13,9 +13,10 @@ module Maptain
     MAX_LINKS = 200
     # The most records read for one file: past it, a scope should pick the records of the file's language itself.
     MAX_RECORDS = 2_000
-    # How I18n.t begins what it gives for a key it does not have, unless told default: nil: "Translation missing",
-    # "translation missing" before i18n 1.13.
-    MISSING_TRANSLATION = /\Atranslation missing/i
+    # What I18n.t gives for a key it does not have, unless told default: nil: "Translation missing: en.key" ("translation
+    # missing" before i18n 1.13), or "Translation missing. Options considered were:" with a default list. A title that
+    # only starts with those words stays.
+    MISSING_TRANSLATION = /\Atranslation missing(?:: [\w-]+(?:\.[\w-]+)+\z|\. Options considered were:)/i
 
     Entry = Data.define(:section, :title, :url, :notes)
     # A file to write: its name, its language and the host it is for.
@@ -210,9 +211,15 @@ module Maptain
         @mutex.synchronize { cached.refreshing = false }
       end
 
+      # A mistake in the code or the configuration (a misnamed service, a storage without read) is raised as is.
+      # Anything else the storage raises (a timeout, a refused connection, a 5xx) is unreachable, and instrumented
+      # as storage_error.maptain, since the request answers 503 instead of raising.
       def read(name)
         Maptain.configuration.storage.read(name)
-      rescue => exception # whatever the storage raises: a timeout, a refused connection, a 5xx
+      rescue NameError, KeyError, ArgumentError, Maptain::Error
+        raise
+      rescue => exception
+        ActiveSupport::Notifications.instrument("storage_error.maptain", name:, exception:)
         raise StorageUnreachable, exception.message
       end
 

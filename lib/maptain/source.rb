@@ -22,7 +22,7 @@ module Maptain
     UNSAFE_CHARACTER = Regexp.new(UNSAFE)
     UNSAFE_BYTE = Regexp.new(UNSAFE, Regexp::NOENCODING)
     # Records loaded at once for the llms.txt: one more than it may list.
-    LLMS_TXT_BATCH = 201
+    LLMS_TXT_BATCH_RECORDS = 201
 
     class << self
       def inherited(subclass)
@@ -183,23 +183,13 @@ module Maptain
 
     # The records of the llms.txt, until the caller has enough: in batches of ids for a relation that names no
     # order, limit or offset, so that the file does not change with the database's order; otherwise as the relation
-    # says, a page of BATCH at a time, never more than MAX_RECORDS + 1 rows. A block named, not forwarded: Ruby
-    # 3.3.0 rejects & inside a block.
+    # says, in one query of at most MAX_RECORDS + 1 rows: paging it would skip rows where its order has ties.
     def each_llms_txt_record(scope, &block)
       records = scope ? instance_exec(&scope) : relation
       return records.each(&block) unless records.respond_to?(:find_each) && records.respond_to?(:order_values)
-      return records.find_each(batch_size: LLMS_TXT_BATCH, &block) if records.order_values.empty? && !records.limit_value && !records.offset_value
+      return records.find_each(batch_size: LLMS_TXT_BATCH_RECORDS, &block) if records.order_values.empty? && !records.limit_value && !records.offset_value
 
-      wanted = [records.limit_value, LlmsTxt::MAX_RECORDS + 1].compact.min
-      first = records.offset_value || 0
-      done = 0
-      while done < wanted
-        page = records.offset(first + done).limit([LLMS_TXT_BATCH, wanted - done].min).to_a
-        page.each(&block)
-        break if page.size < [LLMS_TXT_BATCH, wanted - done].min
-
-        done += page.size
-      end
+      records.limit([records.limit_value, LlmsTxt::MAX_RECORDS + 1].compact.min).each(&block)
     end
 
     def locales_of(record)

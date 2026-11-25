@@ -478,8 +478,8 @@ class LlmsTxtTest < MaptainTest
     refute(build.warnings.any? { |warning| warning.message.include?("records without filling") })
   end
 
-  def test_an_ordered_scope_is_read_a_page_at_a_time
-    Post.insert_all((1..1_000).map { |id| {id:, title: "Post #{id}", languages: "fr", created_at: LONG_AGO, updated_at: LONG_AGO} })
+  def test_an_ordered_scope_is_read_in_one_query_of_at_most_max_records_plus_one
+    Post.insert_all((1..2_500).map { |id| {id:, title: "Post #{id}", languages: "fr", created_at: LONG_AGO, updated_at: LONG_AGO} })
     source = source("OrderedPostSitemap") do
       scope { Post.published }
       url { |post, locale| post_url(post, locale:) }
@@ -490,7 +490,7 @@ class LlmsTxtTest < MaptainTest
     counting = ->(*, payload) { largest = [largest, payload[:record_count]].max if payload[:class_name] == "Post" }
     ActiveSupport::Notifications.subscribed(counting, "instantiation.active_record") { source.new(Maptain.configuration).llms_txt_entries(:en) }
 
-    assert_equal 201, largest
+    assert_equal 2_001, largest
   end
 
   def test_hosts_that_differ_by_port_get_their_own_file
@@ -508,6 +508,8 @@ class LlmsTxtTest < MaptainTest
 
   def test_a_lowercase_missing_translation_is_left_out
     refute Maptain::LlmsTxt.present?("translation missing: en.llms_txt.title")
+    refute Maptain::LlmsTxt.present?("Translation missing. Options considered were:\n- en.a\n- en.b")
+    assert Maptain::LlmsTxt.present?("Translation missing in Safari: a fix")
     assert Maptain::LlmsTxt.present?("Translations")
   end
 
@@ -540,6 +542,21 @@ class LlmsTxtTest < MaptainTest
 
     assert storage.content_by_name.fetch("llms.txt").start_with?("# Example\n")
     assert_raises(Maptain::ConfigurationError) { Maptain.configuration.llms_txt = {title: "Example", sumary: "typo"} }
+  end
+
+  def test_a_storage_mistake_is_raised_and_an_outage_instrumented
+    storage.define_singleton_method(:read) { |_name| raise NameError, "uninitialized constant Sitemaps" }
+
+    assert_raises(NameError) { Maptain::LlmsTxt::App.new.call({}) }
+
+    storage.define_singleton_method(:read) { |_name| raise IOError, "unreachable" }
+    events = []
+    ActiveSupport::Notifications.subscribed(->(*, payload) { events << payload }, "storage_error.maptain") do
+      assert_equal 503, Maptain::LlmsTxt::App.new.call({}).first
+    end
+
+    assert_equal ["llms.txt"], events.map { |payload| payload[:name] }
+    assert_instance_of IOError, events.first[:exception]
   end
 
   private
