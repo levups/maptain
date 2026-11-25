@@ -16,7 +16,7 @@ module Maptain
     # What I18n.t gives for a key it does not have, unless told default: nil: "Translation missing: en.key" ("translation
     # missing" before i18n 1.13), or "Translation missing. Options considered were:" with a default list. A title that
     # only starts with those words stays.
-    MISSING_TRANSLATION = /\Atranslation missing(?:: [\w-]+(?:\.[\w-]+)+\z|\. Options considered were:)/i
+    MISSING_TRANSLATION = /\Atranslation missing(?:: [^\s.]+\..+\z|\. Options considered were:)/i
 
     Entry = Data.define(:section, :title, :url, :notes)
     # A file to write: its name, its language and the host it is for.
@@ -186,7 +186,7 @@ module Maptain
         case action
         when :refresh then refresh(cached, name)
         when :read then read(name)
-        when :error then raise StorageUnreachable, error.message
+        when :error then raise(error.is_a?(StorageUnreachable) ? StorageUnreachable.new(error.message) : error)
         else copy
         end
       end
@@ -200,7 +200,7 @@ module Maptain
           cached.expires_at = now + (content ? TTL_SECONDS : RETRY_SECONDS)
         end
         content
-      rescue StorageUnreachable => exception
+      rescue StorageUnreachable, NameError, KeyError, ArgumentError, Maptain::Error => exception # the copy at hand still serves
         copy = @mutex.synchronize do
           cached.error = exception
           cached.expires_at = now + RETRY_SECONDS
@@ -213,13 +213,13 @@ module Maptain
 
       # A mistake in the code or the configuration (a misnamed service, a storage without read) is raised as is.
       # Anything else the storage raises (a timeout, a refused connection, a 5xx) is unreachable, and instrumented
-      # as storage_error.maptain, since the request answers 503 instead of raising.
+      # as storage_error.maptain: the request answers with its copy, or 503 without one, instead of raising.
       def read(name)
         Maptain.configuration.storage.read(name)
       rescue NameError, KeyError, ArgumentError, Maptain::Error
         raise
       rescue => exception
-        ActiveSupport::Notifications.instrument("storage_error.maptain", name:, exception:)
+        ActiveSupport::Notifications.instrument("storage_error.maptain", name:, exception_object: exception)
         raise StorageUnreachable, exception.message
       end
 

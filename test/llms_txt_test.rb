@@ -556,7 +556,40 @@ class LlmsTxtTest < MaptainTest
     end
 
     assert_equal ["llms.txt"], events.map { |payload| payload[:name] }
-    assert_instance_of IOError, events.first[:exception]
+    assert_instance_of IOError, events.first[:exception_object]
+  end
+
+  def test_missing_translations_of_any_key_are_left_out
+    Maptain.configuration.llms_txt = {title: -> { I18n.t("site.title?") }, summary: -> { I18n.t("llms_txt.résumé") }}
+    create_post(1)
+    build
+
+    refute_includes storage.content_by_name.fetch("llms.txt"), "Translation missing"
+    refute Maptain::LlmsTxt.present?("Translation missing: en.a.b c.x")
+  end
+
+  def test_a_cached_copy_is_served_whatever_a_refresh_raises
+    create_post(1)
+    build
+    app = Maptain::LlmsTxt::App.new
+    app.call({})
+    reads = 0
+    storage.define_singleton_method(:read) do |_name|
+      reads += 1
+      raise NoMethodError, "undefined method 'body' for nil"
+    end
+    app.instance_variable_get(:@cached_by_name).fetch("llms.txt").expires_at = 0
+
+    assert_equal [200, 200, 200], Array.new(3) { app.call({}).first }
+    assert_equal 1, reads
+  end
+
+  def test_a_code_mistake_keeps_raising_until_the_next_try
+    storage.define_singleton_method(:read) { |_name| raise NameError, "uninitialized constant Sitemaps" }
+    app = Maptain::LlmsTxt::App.new
+
+    assert_raises(NameError) { app.call({}) }
+    assert_raises(NameError) { app.call({}) }
   end
 
   private
