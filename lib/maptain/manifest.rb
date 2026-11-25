@@ -3,9 +3,10 @@
 module Maptain
   # What the last build wrote: for each shard of each source, its fingerprint and its files. pending lists the
   # files a build started to publish before it could record them, so that the next one can remove them;
-  # unsubmitted the URLs IndexNow did not take, for the next one to send again.
+  # unsubmitted the URLs IndexNow did not take, for the next one to send again; extras the digest of each file
+  # that is not a sitemap, such as llms.txt, by name.
   class Manifest
-    attr_reader :built_at, :rebuilt_at, :digest, :shards_by_source, :pending, :unsubmitted
+    attr_reader :built_at, :rebuilt_at, :digest, :shards_by_source, :pending, :unsubmitted, :extras
 
     def self.read(storage, name)
       json = storage.read(name)
@@ -13,7 +14,8 @@ module Maptain
 
       stored = JSON.parse(json)
       new(digest: stored["digest"], built_at: time(stored["built_at"]), rebuilt_at: time(stored["rebuilt_at"]),
-        shards_by_source: stored["sources"] || {}, pending: stored["pending"] || [], unsubmitted: stored["unsubmitted"] || [])
+        shards_by_source: stored["sources"] || {}, pending: stored["pending"] || [], unsubmitted: stored["unsubmitted"] || [],
+        extras: stored["extras"] || {})
     rescue JSON::ParserError, ArgumentError, TypeError
       # A manifest we cannot read is a manifest we do not have: the build starts over and replaces it.
       new
@@ -23,13 +25,14 @@ module Maptain
       Time.iso8601(text) if text
     end
 
-    def initialize(digest: nil, built_at: nil, rebuilt_at: nil, shards_by_source: {}, pending: [], unsubmitted: [])
+    def initialize(digest: nil, built_at: nil, rebuilt_at: nil, shards_by_source: {}, pending: [], unsubmitted: [], extras: {})
       @digest = digest
       @built_at = built_at
       @rebuilt_at = rebuilt_at
       @shards_by_source = shards_by_source
       @pending = pending
       @unsubmitted = unsubmitted
+      @extras = extras
     end
 
     def shard(source, key)
@@ -52,7 +55,8 @@ module Maptain
       # Whole seconds, like the lastmods compared to built_at: a change in the second of a build is sent again
       # rather than never.
       JSON.pretty_generate("digest" => digest, "built_at" => built_at&.utc&.iso8601,
-        "rebuilt_at" => rebuilt_at&.utc&.iso8601, "pending" => pending, "unsubmitted" => unsubmitted, "sources" => shards_by_source)
+        "rebuilt_at" => rebuilt_at&.utc&.iso8601, "pending" => pending, "unsubmitted" => unsubmitted, "extras" => extras,
+        "sources" => shards_by_source)
     end
   end
 end

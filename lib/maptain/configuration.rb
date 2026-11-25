@@ -7,7 +7,7 @@ module Maptain
     DEFAULT_REBUILD_EVERY_SECONDS = 7 * 24 * 60 * 60
 
     attr_accessor :filename, :load_sources, :rebuild_every, :storage, :x_default
-    attr_reader :host, :host_by_locale, :index_now_key, :index_now_key_location
+    attr_reader :host, :host_by_locale, :index_now_key, :index_now_key_location, :llms_txt
     attr_writer :locales, :sitemaps_url, :sources
 
     def initialize
@@ -63,6 +63,11 @@ module Maptain
       end
 
       @index_now_key_location = path
+    end
+
+    # The llms.txt of the site: {title:, summary:, details:, locale:}, or nil for none.
+    def llms_txt=(options)
+      @llms_txt = options && LlmsTxt.new(**options)
     end
 
     def locales

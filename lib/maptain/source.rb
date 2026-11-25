@@ -71,6 +71,14 @@ module Maptain
         definitions[:shard_size] = Integer(count)
       end
 
+      # Lists records in the llms.txt of the site, under a heading: the records of `scope`, by default all of
+      # the source's, each with the title and notes the block returns ([title, notes], or a title alone).
+      def llms_txt(section, scope: nil, &entry)
+        raise SourceError, "#{name}.llms_txt needs a block returning the title of a record" unless entry
+
+        definitions[:llms_txt] = {section:, scope:, entry:}
+      end
+
       def slug(name = nil)
         definitions[:slug] = name.to_s if name
         return definitions[:slug] if definitions[:slug]
@@ -123,7 +131,42 @@ module Maptain
       (shard == WHOLE) ? prefix : "#{prefix}-#{shard.rjust(5, "0")}"
     end
 
+    # The links this source adds to the llms.txt, in one language. A record that does not exist in it is left
+    # out. Its blocks run in that language, like the url block.
+    def llms_txt_entries(locale)
+      definition = definitions[:llms_txt]
+      return [] unless definition
+
+      hreflang = Xml.hreflang(locale)
+      records = definition[:scope] ? instance_exec(&definition[:scope]) : relation
+      section = speaking(locale) { definition[:section].respond_to?(:call) ? instance_exec(&definition[:section]) : definition[:section] }
+      records.filter_map do |record|
+        next unless locales_of(record).any? { |record_locale| Xml.hreflang(record_locale) == hreflang }
+
+        url = url_by_locale_of(record, [locale])[hreflang]
+        next unless url
+
+        title, notes = speaking(locale) { Array(instance_exec(record, &definition[:entry])) }
+        LlmsTxt::Entry.new(section:, title:, url:, notes:)
+      end
+    end
+
     private
+
+    def locales_of(record)
+      definitions[:locales] ? Array(instance_exec(record, &definitions[:locales])) : configuration.locales
+    end
+
+    # Runs a block with the host and I18n locale of a language, as the url block gets them.
+    def speaking(locale)
+      app_locale = I18n.locale
+      _hreflang, @language_host, i18n_locale = language_for(locale)
+      I18n.locale = i18n_locale || app_locale
+      yield
+    ensure
+      @language_host = nil
+      I18n.locale = app_locale
+    end
 
     def definitions
       self.class.definitions
@@ -149,7 +192,7 @@ module Maptain
     end
 
     def page_for(record)
-      locales = definitions[:locales] ? Array(instance_exec(record, &definitions[:locales])) : configuration.locales
+      locales = locales_of(record)
       given_lastmod = lastmod_of(record)
       lastmod = Xml.timestamp(given_lastmod)
       Page.new(url_by_locale: url_by_locale_of(record, locales), lastmod:, modified_at: lastmod && Xml.time(lastmod),
