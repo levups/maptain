@@ -73,6 +73,7 @@ module Maptain
       @tracking = @submit && @configuration.index_now_key && @previous.built_at.present?
       @diffing = @tracking && @previous.digest == @configuration.digest
       @moved_sources = Set.new
+      @news_sources = @configuration.sources.select { |source_class| source_class.definitions.key?(:news) }.to_set { |source_class| source_class.slug }
 
       llms_txt_sources = []
       @configuration.sources.each do |source_class|
@@ -86,7 +87,8 @@ module Maptain
       publish_index
       publish_llms_txt(llms_txt_by_name) if llms_txt_by_name
       deleted = (@previous.file_names | @previous.pending | @previous.extras.keys) - @manifest.file_names - @manifest.extras.keys
-      @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) })) if @diffing
+      # Not the pages of moved ranges, nor the articles of a news file gone because they grew old.
+      @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) || @news_sources.include?(previous_source_of(name)) })) if @diffing
       deleted.each { |name| @storage.delete(name) }
       publish_index_now_key
       urls = urls_to_submit
@@ -117,7 +119,9 @@ module Maptain
     end
 
     def render(source, shard, fingerprint, seen_urls)
-      writer = ShardWriter.new(directory: @directory, basename: source.basename(shard))
+      # Google reads no more than 1,000 news entries a file, whatever the shard size.
+      max_urls = source.news? ? Xml::MAX_NEWS_PER_FILE : ShardWriter::MAX_URLS_PER_FILE
+      writer = ShardWriter.new(directory: @directory, basename: source.basename(shard), max_urls:)
       changed_urls = []
       urls = [] if @diffing
       ActiveSupport::Notifications.instrument("shard.maptain", source: source.slug, shard:) do
@@ -133,7 +137,7 @@ module Maptain
       if writer.files.all? { |file| same_as_before?(file) }
         changed_urls.clear
       elsif urls
-        changed_urls.concat(appeared_or_gone(source.slug, shard, fingerprint, urls))
+        changed_urls.concat(appeared_or_gone(source.slug, shard, fingerprint, urls, gone: !source.news?))
       end
       fingerprint ||= writer.content_digest
       # Recorded now, published once every shard is rendered: the index keeps the order of the sources.
@@ -143,7 +147,8 @@ module Maptain
 
     # Read while the previous files are still in the storage: a page that appeared or went away is a change too,
     # whatever its lastmod says. Not when the ranges moved, which only carries pages from one file to another.
-    def appeared_or_gone(source_slug, shard, fingerprint, urls)
+    # gone: false for news, whose articles leave when they grow old, not when their page does.
+    def appeared_or_gone(source_slug, shard, fingerprint, urls, gone: true)
       stored = @previous.shard(source_slug, shard)
       if stored && fingerprint && stored["fingerprint"].to_s.split("/").first != fingerprint.split("/").first
         @moved_sources << source_slug
@@ -152,7 +157,7 @@ module Maptain
 
       previous_urls = urls_in((stored&.fetch("files") || []).map { |file| file["name"] }).to_set
       urls = urls.to_set
-      (urls - previous_urls).to_a + (previous_urls - urls).to_a
+      gone ? (urls - previous_urls).to_a + (previous_urls - urls).to_a : (urls - previous_urls).to_a
     end
 
     def publish_rendered
@@ -323,6 +328,8 @@ module Maptain
       elsif page.modified_at && page.modified_at > @manifest.built_at
         warn_counted(source, :future_lastmod, page.urls.first, "has a lastmod in the future (#{page.lastmod})")
       end
+      # Counted by kind of mistake: the reason without what it quotes or counts.
+      page.rejected_media.each { |url, reason| warn_counted(source, :"media #{reason.sub(/ \(.*\z/, "").gsub(/-?\d+/, "N")}", url, reason) }
     end
 
     def inspect_index(url, file_count)
