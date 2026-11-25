@@ -200,10 +200,13 @@ end
 ```
 
 A video without a title, a description, a thumbnail or a `player_loc` or `content_loc` is left out with a warning,
-as is one lasting more than 8 hours.
+as is one lasting more than 8 hours, one whose player is the page itself, or one with a date that lacks its day.
+Titles are cut at 100 characters, descriptions at 2,048.
 
-Google News reads articles of the last two days only. Give them a source of their own, scoped to those days: an
-article that leaves the scope changes the count of its file, which is rewritten without it.
+Google News reads articles of the last two days only, and 1,000 per file at most: a source with a `news` block gets
+files that hold no more. Give the articles a source of their own, scoped to those days: an article that leaves the
+scope changes the count of its file, which is rewritten without it. sitemap_generator's `publication_name:` and
+`publication_language:` are `name:` and `language:` here; any other key leaves the entry out with a warning.
 
 ```ruby
 class NewsSitemap < Maptain::Source

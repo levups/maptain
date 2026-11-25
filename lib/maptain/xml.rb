@@ -17,8 +17,15 @@ module Maptain
     VIDEO_KEYS = %i[thumbnail_loc title description content_loc player_loc duration publication_date expiration_date].freeze
     MAX_VIDEO_DESCRIPTION_CHARACTERS = 2_048
     MAX_VIDEO_DURATION_SECONDS = 28_800
+    MAX_VIDEO_TITLE_CHARACTERS = 100
+    # What XML 1.0 forbids in text, tabs and line breaks aside.
+    XML_FORBIDDEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/
+    # Chinese written in Traditional characters, by script or by region.
+    TRADITIONAL_CHINESE = %w[hant tw hk mo].freeze
     # https://developers.google.com/search/docs/crawling-indexing/sitemaps/news-sitemap
     NEWS_KEYS = %i[name language title publication_date].freeze
+    # Google reads no more than 1,000 news entries per file.
+    MAX_NEWS_PER_FILE = 1_000
     # https://www.w3.org/TR/NOTE-datetime: a year, a month, a day, or a time with its zone.
     W3C_DATE = /\A(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?\z/
     W3C_TIME = /\A(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})\z/
@@ -42,56 +49,74 @@ module Maptain
       entries.map! { |hreflang, url| "<url><loc>#{escape(url)}</loc>#{shared}#{page.media_by_locale[hreflang]}</url>\n" }
     end
 
-    # A <video:video>, or the reason it cannot be one. Locations are absolute already.
-    def video(fields)
+    # A <video:video>, or the reason it cannot be one. Locations are absolute already; page_url is the <loc>, which
+    # a player or content location must not be. Tags in the order of the sitemap-video/1.1 schema.
+    def video(fields, page_url)
       unknown = fields.keys - VIDEO_KEYS
       return [nil, "has a video with #{unknown.first.inspect}, not one of #{VIDEO_KEYS.join(", ")}"] if unknown.any?
 
+      fields = fields.transform_values { |value| value.is_a?(String) ? text(value).presence : value }
       missing = %i[thumbnail_loc title description].reject { |key| fields[key].present? }
-      missing << :player_loc unless fields[:content_loc].present? || fields[:player_loc].present?
+      missing << :player_loc unless fields[:content_loc] || fields[:player_loc]
       return [nil, "has a video without #{missing.first}, left out"] if missing.any?
+      return [nil, "has a video whose player_loc or content_loc is the page itself, left out"] if [fields[:player_loc], fields[:content_loc]].include?(page_url)
 
-      duration = fields[:duration]
-      if duration && !duration.to_i.between?(1, MAX_VIDEO_DURATION_SECONDS)
-        return [nil, "has a video lasting #{duration.inspect} seconds, not 1 to #{MAX_VIDEO_DURATION_SECONDS}, left out"]
+      duration = fields[:duration] && Integer(fields[:duration], exception: false)
+      if fields[:duration] && !duration&.between?(1, MAX_VIDEO_DURATION_SECONDS)
+        return [nil, "has a video lasting #{fields[:duration].inspect} seconds, not 1 to #{MAX_VIDEO_DURATION_SECONDS}, left out"]
       end
 
-      dates = %i[publication_date expiration_date].to_h { |key| [key, fields[key] && timestamp(fields[key])] }
+      dates = %i[expiration_date publication_date].to_h { |key| [key, fields[key] && full_date(fields[key])] }
       rejected = dates.find { |key, stamp| fields[key] && stamp.nil? }
-      return [nil, "has a video #{rejected.first} that is not a W3C date (#{fields[rejected.first].inspect}), left out"] if rejected
+      return [nil, "has a video #{rejected.first} that is not a full W3C date (#{fields[rejected.first].inspect}), left out"] if rejected
 
-      description = fields[:description].to_s.strip[0, MAX_VIDEO_DESCRIPTION_CHARACTERS]
       tags = "<video:thumbnail_loc>#{escape(fields[:thumbnail_loc])}</video:thumbnail_loc>" \
-        "<video:title>#{escape(fields[:title].to_s.strip)}</video:title>" \
-        "<video:description>#{escape(description)}</video:description>"
-      tags << "<video:content_loc>#{escape(fields[:content_loc])}</video:content_loc>" if fields[:content_loc].present?
-      tags << "<video:player_loc>#{escape(fields[:player_loc])}</video:player_loc>" if fields[:player_loc].present?
-      tags << "<video:duration>#{duration.to_i}</video:duration>" if duration
+        "<video:title>#{escape(fields[:title][0, MAX_VIDEO_TITLE_CHARACTERS])}</video:title>" \
+        "<video:description>#{escape(fields[:description][0, MAX_VIDEO_DESCRIPTION_CHARACTERS])}</video:description>"
+      tags << "<video:content_loc>#{escape(fields[:content_loc])}</video:content_loc>" if fields[:content_loc]
+      tags << "<video:player_loc>#{escape(fields[:player_loc])}</video:player_loc>" if fields[:player_loc]
+      tags << "<video:duration>#{duration}</video:duration>" if duration
       dates.each { |key, stamp| tags << "<video:#{key}>#{escape(stamp)}</video:#{key}>" if stamp }
       ["<video:video>#{tags}</video:video>", nil]
     end
 
-    # A <news:news>, or the reason it cannot be one. language is the hreflang's language when not given.
+    # A <news:news>, or the reason it cannot be one. language: the page's when not given, spelled as Google wants.
     def news(fields, hreflang)
       unknown = fields.keys - NEWS_KEYS
       return [nil, "has news with #{unknown.first.inspect}, not one of #{NEWS_KEYS.join(", ")}"] if unknown.any?
 
+      fields = fields.transform_values { |value| value.is_a?(String) ? text(value).presence : value }
       missing = %i[name title publication_date].reject { |key| fields[key].present? }
       return [nil, "has news without #{missing.first}, left out"] if missing.any?
 
-      published = timestamp(fields[:publication_date])
-      return [nil, "has news whose publication_date is not a W3C date (#{fields[:publication_date].inspect}), left out"] unless published
+      published = full_date(fields[:publication_date])
+      return [nil, "has news whose publication_date is not a full W3C date (#{fields[:publication_date].inspect}), left out"] unless published
 
+      language = news_language(hreflang(fields[:language] || hreflang))
       ["<news:news><news:publication><news:name>#{escape(fields[:name])}</news:name>" \
-        "<news:language>#{escape(fields[:language] || news_language(hreflang))}</news:language></news:publication>" \
+        "<news:language>#{escape(language)}</news:language></news:publication>" \
         "<news:publication_date>#{escape(published)}</news:publication_date>" \
-        "<news:title>#{escape(fields[:title].to_s.strip)}</news:title></news:news>", nil]
+        "<news:title>#{escape(fields[:title])}</news:title></news:news>", nil]
     end
 
-    # Google News takes ISO 639 codes, and zh-cn or zh-tw for Chinese.
+    # Text XML 1.0 can hold: valid UTF-8, without the control characters it forbids, on its own lines trimmed.
+    def text(value)
+      value.to_s.scrub("").gsub(XML_FORBIDDEN, "").strip
+    end
+
+    # A W3C date with at least its day, as the video and news schemas want, or nil.
+    def full_date(value)
+      stamp = timestamp(value)
+      stamp if stamp&.match?(/\A\d{4}-\d{2}-\d{2}/)
+    end
+
+    # Google News takes ISO 639 codes, and zh-cn or zh-tw for Chinese: Simplified or Traditional, by script or by
+    # region.
     def news_language(hreflang)
-      language, region = hreflang.downcase.split("-", 2)
-      (language == "zh" && region) ? "zh-#{region}" : language
+      language, *subtags = hreflang.downcase.split("-")
+      return language unless language == "zh" && subtags.any?
+
+      (subtags & TRADITIONAL_CHINESE).any? ? "zh-tw" : "zh-cn"
     end
 
     def sitemap_entry(url, lastmod)
