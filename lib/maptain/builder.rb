@@ -257,7 +257,7 @@ module Maptain
           "#{LlmsTxt::MAX_LINKS}: give llms_txt a smaller scope")
       end
 
-      content = llms_txt.render(entries)
+      content = llms_txt.render(entries, llms_txt.locale_in(@configuration))
       digest = Digest::SHA256.hexdigest(content)
       @manifest.extras[LlmsTxt::NAME] = digest
       if @full || @previous.extras[LlmsTxt::NAME] != digest

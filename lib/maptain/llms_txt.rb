@@ -27,11 +27,15 @@ module Maptain
       locale || configuration.x_default || configuration.locales.first
     end
 
-    def render(entries)
-      lines = ["# #{line(value(@title))}"]
-      summary = line(value(@summary))
+    # The file, its blocks run with locale as I18n.locale (the app's when I18n does not have it), like a url block.
+    def render(entries, locale)
+      title, summary, details = I18n.with_locale(I18n.locale_available?(locale) ? locale : I18n.locale) do
+        [@title, @summary, @details].map { |given| value(given) }
+      end
+      lines = ["# #{line(title)}"]
+      summary = line(summary)
       lines << "> #{summary}" unless summary.empty?
-      details = value(@details).to_s.strip
+      details = details.to_s.strip
       lines << details unless details.empty?
       entries.group_by(&:section).each do |section, section_entries|
         lines << "## #{line(section)}"

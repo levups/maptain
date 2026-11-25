@@ -42,6 +42,7 @@
         <li><a href="#building">Building</a></li>
         <li><a href="#storage">Storage</a></li>
         <li><a href="#indexnow">IndexNow</a></li>
+        <li><a href="#llms-txt">llms.txt</a></li>
         <li><a href="#checking">Checking</a></li>
         <li><a href="#instrumentation">Instrumentation</a></li>
         <li><a href="#migrating">Coming from sitemap_generator</a></li>
@@ -220,6 +221,26 @@ bin/rails maptain:rebuild   <span class="c"># rewrite everything</span></code></
         <p>When the sitemaps are served from elsewhere (<code>config.sitemaps_url</code>), the key cannot follow them: IndexNow reads it on the site. Put <code>&lt;key&gt;.txt</code> in <code>public/</code> and set <code>config.index_now_key_location</code> to its path, <code>"/&lt;key&gt;.txt"</code>; a build warns until you do.</p>
         <p>With one host per language, every host must serve the key: IndexNow reads it on the host of the URLs it is given.</p>
         <p>A refusal or an endpoint that cannot be reached is a warning, never a failed build: the URLs it did not take are kept in the manifest and sent again with the next build. Once the endpoint cannot be reached, a build asks it nothing more.</p>
+      </div>
+    </section>
+
+    <section id="llms-txt" aria-labelledby="llms-txt-title">
+      <h2 id="llms-txt-title">llms.txt</h2>
+      <div class="prose">
+        <p>An <a href="https://llmstxt.org">llms.txt</a> is a short Markdown summary of a site for language models: its name, a line about it, then a few lists of links to the pages that matter most. Maptain writes it with the sitemaps, from the same sources, when you give it a title:</p>
+<pre><code class="language-ruby"><span class="n">config</span><span class="p">.</span><span class="nf">llms_txt</span> <span class="o">=</span> <span class="p">{</span>
+  <span class="ss">title: </span><span class="s2">"Example Store"</span><span class="p">,</span>
+  <span class="ss">summary: </span><span class="o">-&gt;</span> <span class="p">{</span> <span class="no">I18n</span><span class="p">.</span><span class="nf">t</span><span class="p">(</span><span class="s2">"llms_txt.summary"</span><span class="p">)</span> <span class="p">},</span>   <span class="c1"># a String, or a block run in the language of the file</span>
+  <span class="ss">details: </span><span class="s2">"Prices include VAT. We ship to the EU."</span><span class="p">,</span>
+  <span class="ss">locale: :en</span>                                     <span class="c1"># default: config.x_default, else the first language</span>
+<span class="p">}</span></code></pre>
+        <p>A source joins it with a heading and, for each record, a title and optional notes. Keep it to the pages a reader would start from: past 200 links a build warns, since the file is no longer a summary.</p>
+<pre><code class="language-ruby"><span class="k">class</span> <span class="nc">CategorySitemap</span> <span class="o">&lt;</span> <span class="no">Maptain</span><span class="o">::</span><span class="no">Source</span>
+  <span class="n">scope</span> <span class="p">{</span> <span class="no">Category</span><span class="p">.</span><span class="nf">all</span> <span class="p">}</span>
+  <span class="n">url</span> <span class="p">{</span> <span class="o">|</span><span class="n">category</span><span class="p">,</span> <span class="n">locale</span><span class="o">|</span> <span class="n">category_url</span><span class="p">(</span><span class="n">category</span><span class="p">,</span> <span class="n">locale</span><span class="p">:)</span> <span class="p">}</span>
+  <span class="n">llms_txt</span><span class="p">(</span><span class="s2">"Categories"</span><span class="p">,</span> <span class="ss">scope: </span><span class="o">-&gt;</span> <span class="p">{</span> <span class="no">Category</span><span class="p">.</span><span class="nf">top_level</span> <span class="p">})</span> <span class="p">{</span> <span class="o">|</span><span class="n">category</span><span class="o">|</span> <span class="p">[</span><span class="n">category</span><span class="p">.</span><span class="nf">name</span><span class="p">,</span> <span class="n">category</span><span class="p">.</span><span class="nf">tagline</span><span class="p">]</span> <span class="p">}</span>
+<span class="k">end</span></code></pre>
+        <p>Its links come from the <code>url</code> block, in the language of the file, and records that do not exist in that language are left out. The file is <code>llms.txt</code>, next to <code>sitemap.xml</code>, rewritten only when it changes, and deleted when the setting goes away. Crawlers look for it at the root of the site: when the sitemaps are served from elsewhere (<code>config.sitemaps_url</code>), redirect <code>/llms.txt</code> there. With one host per language, the file is written once, in its language, for every host.</p>
       </div>
     </section>
 
