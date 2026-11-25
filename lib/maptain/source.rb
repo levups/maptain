@@ -25,7 +25,8 @@ module Maptain
     class << self
       def inherited(subclass)
         super
-        subclass.instance_variable_set(:@definitions, definitions.dup)
+        # A subclass lists its own records in the llms.txt, or none: inherited, the same links would come twice.
+        subclass.instance_variable_set(:@definitions, definitions.except(:llms_txt))
       end
 
       def definitions
@@ -75,6 +76,7 @@ module Maptain
       # the source's, each with the title and notes the block returns ([title, notes], or a title alone).
       def llms_txt(section, scope: nil, &entry)
         raise SourceError, "#{name}.llms_txt needs a block returning the title of a record" unless entry
+        raise SourceError, "#{name}.llms_txt scope: must be a lambda, such as -> { Product.featured }" if scope && !scope.respond_to?(:call)
 
         definitions[:llms_txt] = {section:, scope:, entry:}
       end
@@ -131,15 +133,19 @@ module Maptain
       (shard == WHOLE) ? prefix : "#{prefix}-#{shard.rjust(5, "0")}"
     end
 
-    # The links this source adds to the llms.txt, in one language. A record that does not exist in it is left
-    # out. Its blocks run in that language, like the url block.
+    # The links this source adds to the llms.txt, in one language. A record that does not exist in it, or whose
+    # title is blank, is left out. Its blocks, scope included, run in that language, like the url block.
     def llms_txt_entries(locale)
       definition = definitions[:llms_txt]
       return [] unless definition
 
       hreflang = Xml.hreflang(locale)
-      records = definition[:scope] ? instance_exec(&definition[:scope]) : relation
-      section = speaking(locale) { definition[:section].respond_to?(:call) ? instance_exec(&definition[:section]) : definition[:section] }
+      section, records = speaking(locale) do
+        given = definition[:section]
+        [given.respond_to?(:call) ? instance_exec(&given) : given, llms_txt_records(definition[:scope])]
+      end
+      return [] if section.blank?
+
       records.filter_map do |record|
         next unless locales_of(record).any? { |record_locale| Xml.hreflang(record_locale) == hreflang }
 
@@ -147,11 +153,21 @@ module Maptain
         next unless url
 
         title, notes = speaking(locale) { Array(instance_exec(record, &definition[:entry])) }
-        LlmsTxt::Entry.new(section:, title:, url:, notes:)
+        LlmsTxt::Entry.new(section:, title:, url:, notes:) if title.present?
       end
     end
 
     private
+
+    # At most one record more than the file may list, so that a scope too large is warned about without being
+    # loaded whole; in id order when the scope names none, so that the file does not change with the database's.
+    def llms_txt_records(scope)
+      records = scope ? instance_exec(&scope) : relation
+      return records.first(LlmsTxt::MAX_LINKS + 1) unless records.respond_to?(:limit) && records.respond_to?(:order_values)
+
+      records = records.order(records.klass.primary_key) if records.order_values.empty?
+      records.limit([records.limit_value, LlmsTxt::MAX_LINKS + 1].compact.min).to_a
+    end
 
     def locales_of(record)
       definitions[:locales] ? Array(instance_exec(record, &definitions[:locales])) : configuration.locales

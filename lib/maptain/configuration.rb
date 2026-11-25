@@ -41,8 +41,9 @@ module Maptain
       [host!, *host_by_locale.values].uniq
     end
 
-    # Checked when a build starts, not when host_by_locale is set: locales may be set after it.
+    # Checked when a build starts, not when host_by_locale or llms_txt is set: locales may be set after them.
     def validate!
+      llms_txt&.locale_in(self)
       hreflangs = locales.map { |locale| Xml.hreflang(locale) }
       unknown = host_by_locale.keys - hreflangs
       return if unknown.empty?

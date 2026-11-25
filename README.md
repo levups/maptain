@@ -363,8 +363,10 @@ class CategorySitemap < Maptain::Source
 end
 ```
 
-Its links come from the `url` block, in the language of the file, and records that do not exist in that language
-are left out. The file is `llms.txt`, next to `sitemap.xml`, rewritten only when it changes, and deleted when the
+Its links come from the `url` block, in the language of the file, where the `scope:` and title blocks run too.
+Records that do not exist in that language, or whose title is blank, are left out. Without `scope:`, the source's
+records are read in id order, never more than the file may list. A subclass does not inherit its parent's
+`llms_txt`. The file is `llms.txt`, next to `sitemap.xml`, rewritten only when it changes, and deleted when the
 setting goes away. With one host per language, the file is written once, in its language, for every host.
 
 Crawlers look for it at the root of the site. When the sitemaps are served from elsewhere (`config.sitemaps_url`),

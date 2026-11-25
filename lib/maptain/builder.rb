@@ -245,19 +245,21 @@ module Maptain
       upload(name, "#{Xml::INDEX_OPEN}#{entries.join}#{Xml::INDEX_CLOSE}")
     end
 
-    # Rendered at each build, from a handful of records, and published when it differs. Its links get the checks
-    # of a sitemap's URLs, and one more: past MAX_LINKS, a model no longer reads it as a summary.
+    # Rendered at each build, from a handful of records, and published when it differs. A link listed twice is
+    # kept once; one outside the site is a warning, and so is a file past MAX_LINKS, which a model no longer reads
+    # as a summary.
     def publish_llms_txt(llms_txt, entries)
+      entries = entries.uniq(&:url)
       outside = entries.reject { |entry| on_host?(entry.url) }
       if outside.any?
         @warnings << Warning.new(source: LlmsTxt::NAME, url: outside.first.url, message: @outside_message, others: outside.size - 1)
       end
       if entries.size > LlmsTxt::MAX_LINKS
-        warn(LlmsTxt::NAME, "#{@configuration.host!}/#{LlmsTxt::NAME}", "lists #{entries.size} links, more than " \
+        warn(LlmsTxt::NAME, "#{@configuration.sitemaps_url}/#{LlmsTxt::NAME}", "lists #{entries.size} links, more than " \
           "#{LlmsTxt::MAX_LINKS}: give llms_txt a smaller scope")
       end
 
-      content = llms_txt.render(entries, llms_txt.locale_in(@configuration))
+      content = llms_txt.render(entries, llms_txt.locale_in(@configuration), @configuration.host!)
       digest = Digest::SHA256.hexdigest(content)
       @manifest.extras[LlmsTxt::NAME] = digest
       if @full || @previous.extras[LlmsTxt::NAME] != digest

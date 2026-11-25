@@ -118,32 +118,85 @@ class LlmsTxtTest < MaptainTest
   end
 
   def test_a_link_outside_the_site_is_a_warning
-    outside = Class.new(AboutSitemap) do
-      def self.name = "OutsideSitemap"
+    Maptain.configuration.sources = [source("OutsideSitemap") do
+      scope { %i[about] }
       url { "https://elsewhere.example.org/about" }
-    end
-    Maptain.configuration.sources = [outside]
+      llms_txt("Pages") { "About" }
+    end]
     warnings = build.warnings
 
     assert(warnings.any? { |warning| warning.source == "llms.txt" && warning.url == "https://elsewhere.example.org/about" })
   end
 
-  def test_too_many_links_is_a_warning
-    many = Class.new(AboutSitemap) do
-      def self.name = "ManySitemap"
-      scope { (1..Maptain::LlmsTxt::MAX_LINKS + 1).to_a }
-      url { |number, locale| "/pages/#{number}" }
-    end
-    Maptain.configuration.sources = [many]
+  def test_too_many_links_is_a_warning_and_a_scope_is_never_loaded_whole
+    Maptain.configuration.sources = [source("ManySitemap") do
+      scope { (1..1000).to_a }
+      url { |number, _locale| "/pages/#{number}" }
+      llms_txt("Pages") { |number| "Page #{number}" }
+    end]
     warnings = build.warnings
 
-    assert(warnings.any? { |warning| warning.source == "llms.txt" && warning.message.include?("more than 200") })
+    assert(warnings.any? { |warning| warning.source == "llms.txt" && warning.message.include?("201 links, more than 200") })
+  end
+
+  def test_a_relation_without_order_or_limit_is_read_in_id_order_and_bounded
+    create_post(3)
+    create_post(1)
+    create_post(2)
+    Maptain.configuration.sources = [source("AllPostSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      llms_txt("Posts") { |post| post.title }
+    end]
+    build
+
+    assert_match(/Post 1.*\n.*Post 2.*\n.*Post 3/, storage.content_by_name.fetch("llms.txt"))
+  end
+
+  def test_a_subclass_does_not_list_its_parent_records_again
+    Maptain.configuration.sources = [AboutSitemap, Class.new(AboutSitemap) { slug "other" }]
+    build
+
+    assert_equal 1, storage.content_by_name.fetch("llms.txt").scan("[About]").size
+  end
+
+  def test_a_locale_spelled_otherwise_is_the_sitemap_one
+    Maptain.configuration.locales = %i[en pt_BR]
+    Maptain.configuration.llms_txt = {title: "Example", locale: "pt-BR"}
+    create_post(1, languages: "pt_BR")
+    build
+
+    assert_includes storage.content_by_name.fetch("llms.txt"), "(https://example.com/pt_BR/posts/1)"
+  end
+
+  def test_a_locale_outside_the_site_fails_the_build
+    Maptain.configuration.llms_txt = {title: "Example", locale: :de}
+
+    assert_raises(Maptain::ConfigurationError) { build }
+  end
+
+  def test_backticks_and_tags_cannot_break_a_link
+    create_post(1, title: "Use `x <b>")
+    build
+
+    assert_includes storage.content_by_name.fetch("llms.txt"), "- [Use \\`x \\<b>](https://example.com/en/posts/1)"
+  end
+
+  def test_a_blank_title_leaves_the_record_out
+    create_post(1, title: " ")
+    build
+
+    refute_includes storage.content_by_name.fetch("llms.txt"), "posts/1"
   end
 
   def test_check_renders_it_without_writing_it
-    create_post(1)
+    Maptain.configuration.sources = [source("OutsideSitemap") do
+      scope { %i[about] }
+      url { "https://elsewhere.example.org/about" }
+      llms_txt("Pages") { "About" }
+    end]
 
-    assert_empty Maptain.check
+    assert(Maptain.check.any? { |warning| warning.source == "llms.txt" })
     assert_empty storage.writes
   end
 
@@ -163,11 +216,38 @@ class LlmsTxtTest < MaptainTest
     assert_equal 404, status
   end
 
+  def test_the_app_reads_the_storage_once_per_ttl_and_serves_its_copy_when_the_storage_fails
+    create_post(1)
+    build
+    app = Maptain::LlmsTxt::App.new
+    app.call({})
+    storage.content_by_name["llms.txt"] = "changed"
+
+    assert_includes app.call({}).last.join, "# Example"
+
+    def storage.read(_name)
+      raise IOError, "unreachable"
+    end
+    app.instance_variable_set(:@read_at, -Maptain::LlmsTxt::App::TTL * 2.0)
+
+    assert_includes app.call({}).last.join, "# Example"
+  end
+
   def test_a_title_is_required
     assert_raises(Maptain::ConfigurationError) { Maptain.configuration.llms_txt = {title: ""} }
   end
 
-  def test_a_source_needs_a_block_for_its_entries
+  def test_a_source_needs_a_block_for_its_entries_and_a_lambda_for_its_scope
     assert_raises(Maptain::SourceError) { Class.new(Maptain::Source) { llms_txt "Posts" } }
+    assert_raises(Maptain::SourceError) { Class.new(Maptain::Source) { llms_txt("Posts", scope: Post.all) { "Post" } } }
+  end
+
+  private
+
+  def source(name, &definition)
+    Class.new(Maptain::Source) do
+      define_singleton_method(:name) { name }
+      class_eval(&definition)
+    end
   end
 end

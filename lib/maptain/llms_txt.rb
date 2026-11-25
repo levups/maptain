@@ -22,17 +22,21 @@ module Maptain
       @locale = locale
     end
 
-    # The language of the file: the one given, else x_default, else the first of the site.
+    # The language of the file: the one given, else x_default, else the first of the site, spelled as in
+    # config.locales, so that its URLs and translations are the sitemap's.
     def locale_in(configuration)
-      locale || configuration.x_default || configuration.locales.first
+      wanted = locale || configuration.x_default || configuration.locales.first
+      configuration.locales.find { |site_locale| Xml.hreflang(site_locale) == Xml.hreflang(wanted) } ||
+        raise(ConfigurationError, "llms_txt locale #{wanted.inspect} is not one of the locales: #{configuration.locales.join(", ")}")
     end
 
     # The file, its blocks run with locale as I18n.locale (the app's when I18n does not have it), like a url block.
-    def render(entries, locale)
+    # A title that comes out blank, a missing translation say, falls back to the host.
+    def render(entries, locale, host)
       title, summary, details = I18n.with_locale(I18n.locale_available?(locale) ? locale : I18n.locale) do
         [@title, @summary, @details].map { |given| value(given) }
       end
-      lines = ["# #{line(title)}"]
+      lines = ["# #{line(title).presence || host}"]
       summary = line(summary)
       lines << "> #{summary}" unless summary.empty?
       details = details.to_s.strip
@@ -51,8 +55,14 @@ module Maptain
     end
 
     def item(entry)
-      notes = line(entry.notes)
-      "- [#{line(entry.title).gsub(/[\\\[\]]/) { |character| "\\#{character}" }}](#{destination(entry.url)})#{": #{notes}" unless notes.empty?}"
+      notes = escape(line(entry.notes))
+      "- [#{escape(line(entry.title)).gsub(/[\[\]]/) { |character| "\\#{character}" }}](#{destination(entry.url)})" \
+        "#{": #{notes}" unless notes.empty?}"
+    end
+
+    # A backtick would open a code span across the link, a < an HTML tag.
+    def escape(text)
+      text.gsub(/[\\`<]/) { |character| "\\#{character}" }
     end
 
     # A parenthesis would end the link early.
@@ -67,15 +77,40 @@ module Maptain
 
     # Serves the file at the root of the site when the sitemaps live elsewhere (config.sitemaps_url), where
     # crawlers do not look for it. In config/routes.rb: get "llms.txt", to: Maptain::LlmsTxt::App.new
-    # It reads the file from config.storage, on every host of the site.
+    # It reads the file from config.storage, on every host of the site, at most once per TTL and process; when the
+    # storage fails, the copy it has is served on.
     class App
-      HEADERS = {"content-type" => "text/plain; charset=utf-8", "cache-control" => "public, max-age=3600"}.freeze
+      TTL = 300
+      HEADERS = {"content-type" => "text/plain; charset=utf-8", "cache-control" => "public, max-age=#{TTL}"}.freeze
+
+      def initialize
+        @mutex = Mutex.new
+        @content = nil
+        @read_at = nil
+      end
 
       def call(_env)
-        content = Maptain.configuration.storage.read(NAME)
+        content = cached_content
         return [404, {"content-type" => "text/plain; charset=utf-8"}, ["Not Found"]] unless content
 
         [200, HEADERS.dup, [content]]
+      end
+
+      private
+
+      def cached_content
+        @mutex.synchronize do
+          now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          if @read_at.nil? || now - @read_at >= TTL
+            begin
+              @content = Maptain.configuration.storage.read(NAME)
+            rescue
+              raise unless @content
+            end
+            @read_at = now
+          end
+          @content
+        end
       end
     end
   end
