@@ -74,17 +74,10 @@ module Maptain
       @diffing = @tracking && @previous.digest == @configuration.digest
       @moved_sources = Set.new
 
-      llms_txt = @configuration.llms_txt
-      llms_txt_locale = llms_txt&.locale_in(@configuration)
-      llms_txt_entries = []
-      @configuration.sources.each do |source_class|
-        source = source_class.new(@configuration)
-        build_source(source)
-        llms_txt_entries.concat(source.llms_txt_entries(llms_txt_locale)) if llms_txt
-      end
+      sources = @configuration.sources.map { |source_class| source_class.new(@configuration).tap { |source| build_source(source) } }
       publish_rendered
       publish_index
-      publish_llms_txt(llms_txt, llms_txt_entries) if llms_txt
+      publish_llms_txt(sources) if @configuration.llms_txt
       deleted = (@previous.file_names | @previous.pending | @previous.extras.keys) - @manifest.file_names - @manifest.extras.keys
       @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) })) if @diffing
       deleted.each { |name| @storage.delete(name) }
@@ -245,30 +238,36 @@ module Maptain
       upload(name, "#{Xml::INDEX_OPEN}#{entries.join}#{Xml::INDEX_CLOSE}")
     end
 
-    # Rendered at each build, from a handful of records, and published when it differs. A link listed twice is
-    # kept once; one outside the site is a warning, and so is a file past MAX_LINKS, which a model no longer reads
-    # as a summary.
-    def publish_llms_txt(llms_txt, entries)
-      entries = entries.uniq(&:url)
+    # One file per host, each rendered at each build from a handful of records, and published when it differs.
+    # A link listed twice is kept once; one outside the site is a warning, and so is a file past MAX_LINKS, which a
+    # model no longer reads as a summary.
+    def publish_llms_txt(sources)
+      llms_txt = @configuration.llms_txt
+      llms_txt.targets(@configuration).each do |target|
+        entries = sources.flat_map { |source| source.llms_txt_entries(target.locale) }.uniq(&:url)
+        check_llms_txt(target.name, entries)
+        content = llms_txt.render(entries, target.locale, target.host)
+        digest = Digest::SHA256.hexdigest(content)
+        @manifest.extras[target.name] = digest
+        if @full || @previous.extras[target.name] != digest
+          announce_new_files([target.name])
+          upload(target.name, content)
+          @written << target.name
+        else
+          @kept << target.name
+        end
+      end
+    end
+
+    def check_llms_txt(name, entries)
       outside = entries.reject { |entry| on_host?(entry.url) }
       if outside.any?
-        @warnings << Warning.new(source: LlmsTxt::NAME, url: outside.first.url, message: @outside_message, others: outside.size - 1)
+        @warnings << Warning.new(source: name, url: outside.first.url, message: @outside_message, others: outside.size - 1)
       end
-      if entries.size > LlmsTxt::MAX_LINKS
-        warn(LlmsTxt::NAME, "#{@configuration.sitemaps_url}/#{LlmsTxt::NAME}", "lists #{entries.size} links, more than " \
-          "#{LlmsTxt::MAX_LINKS}: give llms_txt a smaller scope")
-      end
+      return if entries.size <= LlmsTxt::MAX_LINKS
 
-      content = llms_txt.render(entries, llms_txt.locale_in(@configuration), @configuration.host!)
-      digest = Digest::SHA256.hexdigest(content)
-      @manifest.extras[LlmsTxt::NAME] = digest
-      if @full || @previous.extras[LlmsTxt::NAME] != digest
-        announce_new_files([LlmsTxt::NAME])
-        upload(LlmsTxt::NAME, content)
-        @written << LlmsTxt::NAME
-      else
-        @kept << LlmsTxt::NAME
-      end
+      warn(name, "#{@configuration.sitemaps_url}/#{name}", "lists #{entries.size} links, more than " \
+        "#{LlmsTxt::MAX_LINKS}: give llms_txt a smaller scope")
     end
 
     def upload(name, content)

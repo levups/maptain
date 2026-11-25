@@ -233,6 +233,64 @@ class LlmsTxtTest < MaptainTest
     assert_includes app.call({}).last.join, "# Example"
   end
 
+  def test_one_host_per_language_gets_one_file_per_host_in_its_language
+    I18n.available_locales = %i[en fr de]
+    Maptain.configure do |config|
+      config.locales = %i[en fr de]
+      config.host_by_locale = {de: "https://example.de"}
+      config.llms_txt = {title: -> { "Example (#{I18n.locale})" }}
+    end
+    create_post(1, languages: "en,fr,de")
+    build
+
+    assert_nil storage.content_by_name["llms.txt"]
+    assert_equal <<~MARKDOWN, storage.content_by_name.fetch("llms-en.txt")
+      # Example (en)
+
+      ## Posts
+
+      - [Post 1](https://example.com/en/posts/1): Written in en
+
+      ## Pages
+
+      - [About](https://example.com/en/about)
+    MARKDOWN
+    assert_equal <<~MARKDOWN, storage.content_by_name.fetch("llms-de.txt")
+      # Example (de)
+
+      ## Posts
+
+      - [Post 1](https://example.de/de/posts/1): Written in de
+
+      ## Pages
+
+      - [About](https://example.de/de/about)
+    MARKDOWN
+  ensure
+    I18n.available_locales = nil
+  end
+
+  def test_the_app_serves_the_file_of_the_request_host
+    Maptain.configuration.host_by_locale = {fr: "https://example.fr"}
+    create_post(1)
+    build
+    app = Maptain::LlmsTxt::App.new
+
+    assert_includes app.call("HTTP_HOST" => "example.fr").last.join, "https://example.fr/fr/posts/1"
+    assert_includes app.call("HTTP_HOST" => "EXAMPLE.com:443").last.join, "https://example.com/en/posts/1"
+    assert_equal 404, app.call("HTTP_HOST" => "elsewhere.example.org").first
+  end
+
+  def test_moving_to_one_host_per_language_replaces_the_single_file
+    create_post(1)
+    build
+    Maptain.configuration.host_by_locale = {fr: "https://example.fr"}
+    build
+
+    assert_includes storage.deletions, "llms.txt"
+    assert_equal %w[llms-en.txt llms-fr.txt], storage.content_by_name.keys.grep(/\Allms/).sort
+  end
+
   def test_a_title_is_required
     assert_raises(Maptain::ConfigurationError) { Maptain.configuration.llms_txt = {title: ""} }
   end
