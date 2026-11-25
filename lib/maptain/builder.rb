@@ -74,10 +74,17 @@ module Maptain
       @diffing = @tracking && @previous.digest == @configuration.digest
       @moved_sources = Set.new
 
-      sources = @configuration.sources.map { |source_class| source_class.new(@configuration).tap { |source| build_source(source) } }
+      llms_txt_sources = []
+      @configuration.sources.each do |source_class|
+        source = source_class.new(@configuration)
+        build_source(source)
+        llms_txt_sources << source if @configuration.llms_txt && source.llms_txt?
+      end
+      # Rendered before anything is published: a block that raises stops the build before it changes the storage.
+      llms_txt_by_name = render_llms_txt(llms_txt_sources) if @configuration.llms_txt
       publish_rendered
       publish_index
-      publish_llms_txt(sources) if @configuration.llms_txt
+      publish_llms_txt(llms_txt_by_name) if llms_txt_by_name
       deleted = (@previous.file_names | @previous.pending | @previous.extras.keys) - @manifest.file_names - @manifest.extras.keys
       @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) })) if @diffing
       deleted.each { |name| @storage.delete(name) }
@@ -238,23 +245,29 @@ module Maptain
       upload(name, "#{Xml::INDEX_OPEN}#{entries.join}#{Xml::INDEX_CLOSE}")
     end
 
-    # One file per host, each rendered at each build from a handful of records, and published when it differs.
-    # A link listed twice is kept once; one outside the site is a warning, and so is a file past MAX_LINKS, which a
-    # model no longer reads as a summary.
-    def publish_llms_txt(sources)
+    # One file per host, rendered at each build from a handful of records, by name. A link listed twice is kept
+    # once; one outside the site is a warning, and so is a file past MAX_LINKS, which a model no longer reads as a
+    # summary.
+    def render_llms_txt(sources)
       llms_txt = @configuration.llms_txt
-      llms_txt.targets(@configuration).each do |target|
+      llms_txt.targets(@configuration).to_h do |target|
         entries = sources.flat_map { |source| source.llms_txt_entries(target.locale) }.uniq(&:url)
         check_llms_txt(target.name, entries)
-        content = llms_txt.render(entries, target.locale, target.host)
+        [target.name, llms_txt.render(entries, target.locale, target.host)]
+      end
+    end
+
+    # Each file is published when it differs from the last build's.
+    def publish_llms_txt(content_by_name)
+      content_by_name.each do |name, content|
         digest = Digest::SHA256.hexdigest(content)
-        @manifest.extras[target.name] = digest
-        if @full || @previous.extras[target.name] != digest
-          announce_new_files([target.name])
-          upload(target.name, content)
-          @written << target.name
+        @manifest.extras[name] = digest
+        if @full || @previous.extras[name] != digest
+          announce_new_files([name])
+          upload(name, content)
+          @written << name
         else
-          @kept << target.name
+          @kept << name
         end
       end
     end

@@ -66,9 +66,9 @@ module Maptain
       @index_now_key_location = path
     end
 
-    # The llms.txt of the site: {title:, summary:, details:, locale:}, or nil for none.
+    # The llms.txt of the site: {title:, summary:, details:, locale:}, or nil or false for none.
     def llms_txt=(options)
-      @llms_txt = options && LlmsTxt.new(**options)
+      @llms_txt = (LlmsTxt.new(**options) if options)
     end
 
     def locales

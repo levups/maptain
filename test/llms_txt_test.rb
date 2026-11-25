@@ -128,15 +128,88 @@ class LlmsTxtTest < MaptainTest
     assert(warnings.any? { |warning| warning.source == "llms.txt" && warning.url == "https://elsewhere.example.org/about" })
   end
 
-  def test_too_many_links_is_a_warning_and_a_scope_is_never_loaded_whole
-    Maptain.configuration.sources = [source("ManySitemap") do
-      scope { (1..1000).to_a }
-      url { |number, _locale| "/pages/#{number}" }
-      llms_txt("Pages") { |number| "Page #{number}" }
+  def test_too_many_links_is_a_warning_and_a_relation_is_never_loaded_whole
+    Post.insert_all((1..1000).map { |id| {id:, title: "Post #{id}", created_at: LONG_AGO, updated_at: LONG_AGO} })
+    Maptain.configuration.sources = [source("AllPostSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      llms_txt("Posts") { |post| post.title }
     end]
+    llms_txt_rows = 0
+    counting = ->(*, payload) { llms_txt_rows += payload[:record_count] if payload[:class_name] == "Post" }
+    ActiveSupport::Notifications.subscribed(counting, "instantiation.active_record") do
+      Maptain.configuration.sources.first.new(Maptain.configuration).llms_txt_entries(:en)
+    end
     warnings = build.warnings
 
     assert(warnings.any? { |warning| warning.source == "llms.txt" && warning.message.include?("201 links, more than 200") })
+    assert_equal 201, llms_txt_rows
+  end
+
+  def test_records_left_out_do_not_take_the_place_of_others
+    Post.insert_all((1..250).map { |id| {id:, title: "Post #{id}", languages: "fr", created_at: LONG_AGO, updated_at: LONG_AGO} })
+    create_post(251, languages: "en")
+    Maptain.configuration.sources = [source("AllPostSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      locales { |post| post.languages.split(",").map(&:to_sym) }
+      llms_txt("Posts") { |post| post.title }
+    end]
+    build
+
+    assert_includes storage.content_by_name.fetch("llms.txt"), "- [Post 251](https://example.com/en/posts/251)"
+  end
+
+  def test_a_relation_with_a_join_is_ordered_without_ambiguity
+    create_post(1)
+    Maptain.configuration.sources = [source("JoinedPostSitemap") do
+      scope { Post.published.joins("LEFT JOIN posts AS others ON others.id = posts.id") }
+      url { |post, locale| post_url(post, locale:) }
+      llms_txt("Posts") { |post| post.title }
+    end]
+    build
+
+    assert_includes storage.content_by_name.fetch("llms.txt"), "- [Post 1]"
+  end
+
+  def test_a_block_that_raises_stops_the_build_before_it_publishes_anything
+    create_post(1)
+    Maptain.configuration.sources = [source("FailingSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      llms_txt("Posts") { |_post| raise "no title" }
+    end]
+
+    assert_raises(RuntimeError) { build }
+    assert_empty storage.writes - ["sitemap-manifest.json"]
+  end
+
+  def test_a_missing_translation_is_left_out
+    Maptain.configuration.llms_txt = {title: -> { I18n.t("llms_txt.title") }, summary: -> { I18n.t("llms_txt.summary") }}
+    create_post(1)
+    build
+
+    refute_includes storage.content_by_name.fetch("llms.txt"), "Translation missing"
+    assert storage.content_by_name.fetch("llms.txt").start_with?("# https://example.com\n")
+  end
+
+  def test_false_is_no_llms_txt
+    Maptain.configuration.llms_txt = false
+    create_post(1)
+    build
+
+    refute storage.content_by_name.key?("llms.txt")
+    assert_equal 404, Maptain::LlmsTxt::App.new.call({}).first
+  end
+
+  def test_a_record_language_spelled_otherwise_links_to_the_sitemap_url
+    Maptain.configuration.locales = %i[en pt_BR]
+    Maptain.configuration.llms_txt = {title: "Example", locale: :pt_BR}
+    create_post(1, languages: "pt-BR")
+    build
+
+    assert_includes storage.xml("sitemap-featured_post-00000.xml.gz"), "https://example.com/pt-BR/posts/1"
+    assert_includes storage.content_by_name.fetch("llms.txt"), "(https://example.com/pt-BR/posts/1)"
   end
 
   def test_a_relation_without_order_or_limit_is_read_in_id_order_and_bounded
@@ -210,8 +283,9 @@ class LlmsTxtTest < MaptainTest
     assert_equal storage.content_by_name.fetch("llms.txt"), body.join
   end
 
-  def test_the_app_answers_404_before_the_first_build
-    status, _headers, _body = Maptain::LlmsTxt::App.new.call({})
+  def test_the_app_answers_404_before_the_first_build_with_headers_middleware_can_change
+    status, headers, _body = Maptain::LlmsTxt::App.new.call({})
+    headers["x-request-id"] = "1"
 
     assert_equal 404, status
   end
@@ -225,12 +299,16 @@ class LlmsTxtTest < MaptainTest
 
     assert_includes app.call({}).last.join, "# Example"
 
-    def storage.read(_name)
+    reads = 0
+    storage.define_singleton_method(:read) do |_name|
+      reads += 1
       raise IOError, "unreachable"
     end
-    app.instance_variable_set(:@read_at, -Maptain::LlmsTxt::App::TTL * 2.0)
+    app.instance_variable_get(:@cached_by_name).fetch("llms.txt").expires_at = 0
 
     assert_includes app.call({}).last.join, "# Example"
+    assert_includes app.call({}).last.join, "# Example"
+    assert_equal 1, reads
   end
 
   def test_one_host_per_language_gets_one_file_per_host_in_its_language
@@ -279,6 +357,9 @@ class LlmsTxtTest < MaptainTest
     assert_includes app.call("HTTP_HOST" => "example.fr").last.join, "https://example.fr/fr/posts/1"
     assert_includes app.call("HTTP_HOST" => "EXAMPLE.com:443").last.join, "https://example.com/en/posts/1"
     assert_equal 404, app.call("HTTP_HOST" => "elsewhere.example.org").first
+    assert_includes app.call("HTTP_HOST" => "example.fr.").last.join, "https://example.fr/fr/posts/1"
+    assert_includes app.call("HTTP_HOST" => "internal:3000", "HTTP_X_FORWARDED_HOST" => "example.fr").last.join,
+      "https://example.fr/fr/posts/1"
   end
 
   def test_moving_to_one_host_per_language_replaces_the_single_file

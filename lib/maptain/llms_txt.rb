@@ -11,12 +11,19 @@ module Maptain
     NAME = "llms.txt"
     # A model reads the file in one go: past this, it stops being a summary of the site.
     MAX_LINKS = 200
+    # What I18n.t gives for a key it does not have, unless told default: nil.
+    MISSING_TRANSLATION = "Translation missing: "
 
     Entry = Data.define(:section, :title, :url, :notes)
     # A file to write: its name, its language and the host it is for.
     Target = Data.define(:name, :locale, :host)
 
     attr_reader :locale
+
+    # Text worth writing: neither blank nor a missing translation.
+    def self.present?(text)
+      text.present? && !text.to_s.start_with?(MISSING_TRANSLATION)
+    end
 
     # title, summary and details: a String, or a block run in the language of the file. locale: the language of
     # the file on the main host.
@@ -29,12 +36,16 @@ module Maptain
       @locale = locale
     end
 
-    # The language of the file on the main host: the one given, else x_default, else the first of the site, spelled
-    # as in config.locales, so that its URLs and translations are the sitemap's.
+    # The language of the file on the main host, spelled as in config.locales so that its URLs and translations
+    # are the sitemap's: locale: when given, which must be one of them, else x_default if it is one, else the first.
     def locale_in(configuration)
-      wanted = locale || configuration.x_default || configuration.locales.first
-      site_locale(configuration.locales, wanted) ||
-        raise(ConfigurationError, "llms_txt locale #{wanted.inspect} is not one of the locales: #{configuration.locales.join(", ")}")
+      locales = configuration.locales
+      if locale
+        site_locale(locales, locale) ||
+          raise(ConfigurationError, "llms_txt locale #{locale.inspect} is not one of the locales: #{locales.join(", ")}")
+      else
+        (configuration.x_default && site_locale(locales, configuration.x_default)) || locales.first
+      end
     end
 
     # The files of the site. On a host with several languages, the file is in the one of the main host's file if
@@ -55,7 +66,7 @@ module Maptain
     # A title that comes out blank, a missing translation say, falls back to the host.
     def render(entries, locale, host)
       title, summary, details = I18n.with_locale(I18n.locale_available?(locale) ? locale : I18n.locale) do
-        [@title, @summary, @details].map { |given| value(given) }
+        [@title, @summary, @details].map { |given| text(given) }
       end
       lines = ["# #{line(title).presence || host}"]
       summary = line(summary)
@@ -76,12 +87,13 @@ module Maptain
       locales.find { |candidate| Xml.hreflang(candidate) == Xml.hreflang(wanted) }
     end
 
-    def value(given)
-      given.respond_to?(:call) ? given.call : given
+    def text(given)
+      value = given.respond_to?(:call) ? given.call : given
+      value if self.class.present?(value)
     end
 
     def item(entry)
-      notes = escape(line(entry.notes))
+      notes = self.class.present?(entry.notes) ? escape(line(entry.notes)) : ""
       "- [#{escape(line(entry.title)).gsub(/[\[\]]/) { |character| "\\#{character}" }}](#{destination(entry.url)})" \
         "#{": #{notes}" unless notes.empty?}"
     end
@@ -104,22 +116,27 @@ module Maptain
     # Serves /llms.txt from config.storage, the file of the request's host: on a site with one host per language,
     # and when the sitemaps live elsewhere (config.sitemaps_url), where crawlers do not look for it.
     # In config/routes.rb: get "llms.txt", to: Maptain::LlmsTxt::App.new
-    # Each file is read at most once per TTL and process; when the storage fails, the copy at hand is served on.
+    # Each file is read at most once per TTL_SECONDS and process, by one request while the others get the copy at
+    # hand; when the storage fails, that copy is served on and the storage asked again after RETRY_SECONDS.
     class App
-      TTL = 300
-      HEADERS = {"content-type" => "text/plain; charset=utf-8", "cache-control" => "public, max-age=#{TTL}"}.freeze
-      NOT_FOUND = [404, {"content-type" => "text/plain; charset=utf-8"}.freeze, ["Not Found"].freeze].freeze
+      TTL_SECONDS = 300
+      RETRY_SECONDS = 30
+      CONTENT_TYPE = "text/plain; charset=utf-8"
+
+      Cached = Struct.new(:content, :expires_at, :refreshing)
 
       def initialize
+        require "rack/request"
         @mutex = Mutex.new
-        @content_by_name = {}
-        @read_at_by_name = {}
+        @cached_by_name = {}
       end
 
       def call(env)
         name = name_for(env)
         content = name && cached_content(name)
-        content ? [200, HEADERS.dup, [content]] : NOT_FOUND
+        return [404, {"content-type" => CONTENT_TYPE}, ["Not Found"]] unless content
+
+        [200, {"content-type" => CONTENT_TYPE, "cache-control" => "public, max-age=#{TTL_SECONDS}"}, [content]]
       end
 
       private
@@ -130,24 +147,39 @@ module Maptain
         return unless targets
         return targets.first.name if targets.one?
 
-        request_host = (env["HTTP_HOST"] || env["SERVER_NAME"]).to_s.sub(/:\d+\z/, "").downcase
+        # The host Rails sees, X-Forwarded-Host included, without its port or a final dot.
+        request_host = Rack::Request.new(env).host.to_s.downcase.delete_suffix(".")
         targets.find { |target| URI(target.host).host&.downcase == request_host }&.name
       end
 
       def cached_content(name)
-        @mutex.synchronize do
-          now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          read_at = @read_at_by_name[name]
-          if read_at.nil? || now - read_at >= TTL
-            begin
-              @content_by_name[name] = Maptain.configuration.storage.read(name)
-            rescue
-              raise unless @content_by_name[name]
-            end
-            @read_at_by_name[name] = now
-          end
-          @content_by_name[name]
+        cached, stale = @mutex.synchronize do
+          entry = (@cached_by_name[name] ||= Cached.new(nil, 0, false))
+          stale = !entry.refreshing && now >= entry.expires_at
+          entry.refreshing = true if stale
+          [entry, stale]
         end
+        stale ? refresh(cached, name) : cached.content
+      end
+
+      def refresh(cached, name)
+        content = Maptain.configuration.storage.read(name)
+        @mutex.synchronize do
+          cached.content = content
+          cached.expires_at = now + TTL_SECONDS
+        end
+        content
+      rescue # storage unreachable: the copy at hand is served on, and the storage asked again soon
+        @mutex.synchronize { cached.expires_at = now + RETRY_SECONDS }
+        raise unless cached.content
+
+        cached.content
+      ensure
+        @mutex.synchronize { cached.refreshing = false }
+      end
+
+      def now
+        Process.clock_gettime(Process::CLOCK_MONOTONIC)
       end
     end
   end

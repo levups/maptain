@@ -140,33 +140,50 @@ module Maptain
       return [] unless definition
 
       hreflang = Xml.hreflang(locale)
-      section, records = speaking(locale) do
+      speaking(locale) do
         given = definition[:section]
-        [given.respond_to?(:call) ? instance_exec(&given) : given, llms_txt_records(definition[:scope])]
+        section = given.respond_to?(:call) ? instance_exec(&given) : given
+        next [] if section.blank?
+
+        entries = []
+        each_llms_txt_record(definition[:scope]) do |record|
+          # Spelled as the record's languages spell it, as the sitemap does.
+          record_locale = locales_of(record).find { |candidate| Xml.hreflang(candidate) == hreflang }
+          url = record_locale && url_by_locale_of(record, [record_locale])[hreflang]
+          next unless url
+
+          title, notes = speaking(locale) { Array(instance_exec(record, &definition[:entry])) }
+          entries << LlmsTxt::Entry.new(section:, title:, url:, notes:) if LlmsTxt.present?(title)
+          # One more than the file may list, for the build to warn about it.
+          break if entries.size > LlmsTxt::MAX_LINKS
+        end
+        entries
       end
-      return [] if section.blank?
+    end
 
-      records.filter_map do |record|
-        next unless locales_of(record).any? { |record_locale| Xml.hreflang(record_locale) == hreflang }
-
-        url = url_by_locale_of(record, [locale])[hreflang]
-        next unless url
-
-        title, notes = speaking(locale) { Array(instance_exec(record, &definition[:entry])) }
-        LlmsTxt::Entry.new(section:, title:, url:, notes:) if title.present?
-      end
+    def llms_txt?
+      definitions.key?(:llms_txt)
     end
 
     private
 
-    # At most one record more than the file may list, so that a scope too large is warned about without being
-    # loaded whole; in id order when the scope names none, so that the file does not change with the database's.
-    def llms_txt_records(scope)
+    # The records of the llms.txt, read until enough of them make it into the file: in batches of ids when the
+    # relation names no order and no limit, so that a large one is never loaded whole and the file does not change
+    # with the database's order; a page at a time when it names an order; as given when it names a limit.
+    def each_llms_txt_record(scope, &)
       records = scope ? instance_exec(&scope) : relation
-      return records.first(LlmsTxt::MAX_LINKS + 1) unless records.respond_to?(:limit) && records.respond_to?(:order_values)
+      return records.each(&) unless records.respond_to?(:find_each) && records.respond_to?(:order_values)
+      return records.each(&) if records.limit_value
+      return records.find_each(batch_size: LlmsTxt::MAX_LINKS + 1, &) if records.order_values.empty?
 
-      records = records.order(records.klass.primary_key) if records.order_values.empty?
-      records.limit([records.limit_value, LlmsTxt::MAX_LINKS + 1].compact.min).to_a
+      offset = 0
+      loop do
+        page = records.offset(offset).limit(LlmsTxt::MAX_LINKS + 1).to_a
+        page.each(&)
+        break if page.size <= LlmsTxt::MAX_LINKS
+
+        offset += page.size
+      end
     end
 
     def locales_of(record)
