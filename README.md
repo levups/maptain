@@ -21,6 +21,9 @@ takes a few milliseconds and writes nothing.
 
 Website, guide and benchmarks: <https://levups.github.io/maptain/>.
 
+Coding agents can start from <https://levups.github.io/maptain/llms.txt>, or read this README and the
+website's pages as one Markdown file: <https://levups.github.io/maptain/llms-full.txt>.
+
 ## Is it for you?
 
 Maptain was written for one site: 30,000 products in 24 languages, 720,000 URLs. It will help most if yours
@@ -377,6 +380,7 @@ bundle exec rake test
 bundle exec rubocop
 bundle exec ruby bench/build.rb   # also builds the same sitemap with sitemap_generator: a few minutes
 bundle exec rake docs:highlight   # after editing a code block in docs/
+bundle exec rake docs:llms        # after editing the README or docs/
 ```
 
 ## License

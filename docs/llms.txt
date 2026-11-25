@@ -1,0 +1,17 @@
+# Maptain
+
+> XML sitemaps for Rails sites in many languages, rebuilt only where the content changed
+
+Install with `gem "maptain"` in the Gemfile.
+
+## Docs
+
+- [Everything in one file](https://levups.github.io/maptain/llms-full.txt): the README, then every page below but the home page, in Markdown
+- [Maptain: Rails sitemaps that rewrite only what changed](https://levups.github.io/maptain/): Maptain writes the XML sitemaps of a Rails site from its records, with the hreflang links of every language, and each build rewrites only the files whose records changed.
+- [Maptain Guide](https://levups.github.io/maptain/guide.html): Install Maptain, describe your pages and their languages, build the sitemaps on a schedule, store them through Active Storage and submit changes to IndexNow.
+
+## Optional
+
+- [Maptain Benchmarks](https://levups.github.io/maptain/benchmarks.html): How long Maptain takes to build the sitemaps of 30,000 pages in 24 languages, to build them again when little or nothing changed, and how long sitemap_generator takes for the same.
+- [Changelog](https://github.com/levups/maptain/blob/main/CHANGELOG.md): what changed in each version
+- [Source code](https://github.com/levups/maptain)
