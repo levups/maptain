@@ -12,6 +12,8 @@ module Maptain
     TARGET_BYTES_PER_FILE = 40 * 1024 * 1024
     BYTES_PER_URL_ESTIMATE = 150
     BYTES_PER_ALTERNATE_ESTIMATE = 120
+    # A video with a long description: its tags weigh more than the rest of its <url>.
+    BYTES_PER_VIDEO_ESTIMATE = 2_600
     MYSQL_ADAPTERS = %w[mysql2 trilogy].freeze
     SLUG_FORMAT = /\A[a-z0-9][a-z0-9_-]*\z/
     # A source that is not an Active Record relation is one shard, rendered at each build.
@@ -195,6 +197,10 @@ module Maptain
       definitions.key?(:llms_txt)
     end
 
+    def news?
+      definitions.key?(:news)
+    end
+
     private
 
     # The records of the llms.txt, until the caller has enough: in batches of ids for a relation that names no
@@ -282,17 +288,23 @@ module Maptain
       [media, rejected]
     end
 
+    # The tags of a page in one language; rejected gets a [url, reason] for each video or news left out, or a
+    # field left out of one.
     def media_tags(record, locale, hreflang, url, rejected)
       tags = +""
       if definitions[:video]
         fields_list(instance_exec(record, locale, &definitions[:video])).each do |fields|
-          fields = fields.merge(VIDEO_LOCATIONS.to_h { |key| [key, fields[key] && absolute(fields[key])] }.compact)
-          tag, reason = Xml.video(fields, url)
-          tag ? tags << tag : rejected << [url, reason]
+          locations = VIDEO_LOCATIONS.to_h { |key| [key, fields[key].to_s.strip.presence&.then { |location| absolute(location) }] }
+          tag, reason = Xml.video(fields.merge(locations).compact, url)
+          tags << tag if tag
+          rejected << [url, reason] if reason
         end
       end
-      if definitions[:news] && (fields = instance_exec(record, locale, &definitions[:news]))
-        tag, reason = Xml.news(fields.to_h.transform_keys(&:to_sym), hreflang)
+      news = definitions[:news] && instance_exec(record, locale, &definitions[:news])
+      if news.is_a?(Array)
+        rejected << [url, "has news given as a list: a news block returns one Hash, left out"]
+      elsif news
+        tag, reason = Xml.news(news.to_h.transform_keys(&:to_sym), hreflang)
         tag ? tags << tag : rejected << [url, reason]
       end
       tags
@@ -368,7 +380,9 @@ module Maptain
     def default_shard_size
       locale_count = configuration.locales.size
       alternates = (locale_count > 1) ? locale_count + 1 : 0
-      bytes_per_record = locale_count * (BYTES_PER_URL_ESTIMATE + alternates * BYTES_PER_ALTERNATE_ESTIMATE)
+      bytes_per_url = BYTES_PER_URL_ESTIMATE + alternates * BYTES_PER_ALTERNATE_ESTIMATE
+      bytes_per_url += BYTES_PER_VIDEO_ESTIMATE if definitions[:video]
+      bytes_per_record = locale_count * bytes_per_url
       sizes = [ShardWriter::MAX_URLS_PER_FILE / locale_count, TARGET_BYTES_PER_FILE / bytes_per_record]
       sizes << Xml::MAX_NEWS_PER_FILE / locale_count if definitions[:news]
       sizes.min.clamp(1..)

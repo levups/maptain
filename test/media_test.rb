@@ -81,7 +81,7 @@ class MediaTest < MaptainTest
     messages = build.warnings.map(&:message)
 
     assert(messages.any? { |message| message.include?(":rating") })
-    assert(messages.any? { |message| message.include?("lasting 0 seconds") })
+    assert(messages.any? { |message| message.include?("duration is not 1 to 28800 seconds (0)") })
     assert(messages.any? { |message| message.include?("publication_date that is not a full W3C date") })
   end
 
@@ -181,7 +181,7 @@ class MediaTest < MaptainTest
 
     # Only the French page of post 3 keeps its video: its player is the English page, not itself.
     assert_equal 1, storage.xml("sitemap-video-00000.xml.gz").scan("<video:video>").size
-    assert(messages.any? { |message| message.include?("lasting \"1e4\" seconds") })
+    assert(messages.any? { |message| message.include?("duration is not 1 to 28800 seconds (\"1e4\")") })
     assert(messages.any? { |message| message.include?("not a full W3C date") })
     assert(messages.any? { |message| message.include?("is the page itself") })
   end
@@ -199,7 +199,7 @@ class MediaTest < MaptainTest
     assert_equal "zh-tw", Maptain::Xml.news_language("zh-hant-tw")
     assert_equal "zh-tw", Maptain::Xml.news_language("zh-hk")
     assert_equal "zh-cn", Maptain::Xml.news_language("zh-cn")
-    assert_equal "zh", Maptain::Xml.news_language("zh")
+    assert_equal "zh-cn", Maptain::Xml.news_language("zh")
   end
 
   def test_a_given_news_language_is_spelled_as_google_wants
@@ -226,6 +226,117 @@ class MediaTest < MaptainTest
 
     assert_operator news_counts.max, :<=, 1_000
     assert_equal 2_400, news_counts.sum
+  end
+
+  def test_rich_text_and_binary_strings_are_written_as_text
+    rich = Struct.new(:body) { def to_s = "Rich \u0001 #{body}" }
+    Maptain.configuration.sources = [video_source { VIDEO.merge(title: "caf\xC3\xA9".b, description: rich.new("text")) }]
+    create_post(1)
+    build
+
+    assert_includes storage.xml("sitemap-video-00000.xml.gz").force_encoding(Encoding::UTF_8),
+      "<video:title>café</video:title><video:description>Rich  text</video:description>"
+  end
+
+  def test_a_news_block_returning_a_list_is_warned_about
+    Maptain.configuration.sources = [source("NewsSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      news { |post| [{name: "Example News", title: post.title, publication_date: "2026-11-24"}] }
+    end]
+    create_post(1)
+
+    assert(build.warnings.any? { |warning| warning.message.include?("news given as a list") })
+  end
+
+  def test_a_shard_size_cannot_put_more_than_a_thousand_news_in_a_file
+    Maptain.configuration.sources = [source("NewsSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      news { |post| {name: "Example News", title: post.title, publication_date: "2026-11-24"} }
+      shard_size 5_000
+    end]
+    Post.insert_all((1..600).map { |id| {id:, title: "Post #{id}", created_at: LONG_AGO, updated_at: LONG_AGO} })
+    build
+    news_counts = storage.content_by_name.keys.grep(/\Asitemap-news-/).map { |name| storage.xml(name).scan("<news:news>").size }
+
+    assert_operator news_counts.max, :<=, 1_000
+    assert_equal 1_200, news_counts.sum
+  end
+
+  def test_durations_are_decimal_whole_numbers
+    assert_equal 120, Maptain::Xml.whole_number("0120")
+    assert_nil Maptain::Xml.whole_number("0x5A")
+    assert_equal 90, Maptain::Xml.whole_number(90.0)
+    assert_nil Maptain::Xml.whole_number(90.7)
+  end
+
+  def test_languages_sharing_a_url_write_the_media_one_of_them_has
+    Maptain.configuration.sources = [source("VideoSitemap") do
+      scope { Post.published }
+      url { |post| "/posts/#{post.id}" }
+      video { |_post, locale| VIDEO if locale == :fr }
+    end]
+    create_post(1)
+    build
+
+    assert_equal 1, storage.xml("sitemap-video-00000.xml.gz").scan("<video:video>").size
+  end
+
+  def test_a_field_maptain_does_not_write_keeps_the_video
+    Maptain.configuration.sources = [video_source { VIDEO.merge(rating: 4.5) }]
+    create_post(1)
+    warnings = build.warnings
+
+    assert_equal 2, storage.xml("sitemap-video-00000.xml.gz").scan("<video:video>").size
+    assert(warnings.any? { |warning| warning.message.include?(":rating, not written") })
+  end
+
+  def test_locations_are_trimmed_before_they_are_completed
+    Maptain.configuration.sources = [video_source { VIDEO.merge(thumbnail_loc: " /t.jpg\n") }]
+    create_post(1)
+    build
+
+    assert_includes storage.xml("sitemap-video-00000.xml.gz"), "<video:thumbnail_loc>https://example.com/t.jpg</video:thumbnail_loc>"
+  end
+
+  def test_a_chinese_script_wins_over_its_region_and_a_bad_language_is_left_out
+    assert_equal "zh-cn", Maptain::Xml.news_language("zh-hans-hk")
+    _tag, reason = Maptain::Xml.news({name: "n", title: "t", publication_date: "2026-11-24", language: "English"}, "en")
+
+    assert_includes reason, "not a language code"
+  end
+
+  def test_an_article_leaving_a_news_scope_is_not_sent_to_index_now_again
+    Maptain.configure do |config|
+      config.index_now_key = "c1f0e2b4a6d84f3e9b7a5c3d1e0f2a4b"
+      config.sources = [source("NewsSitemap") do
+        scope { Post.published.where(created_at: Time.utc(2026, 11, 23)..) }
+        url { |post, locale| post_url(post, locale:) }
+        news { |post| {name: "Example News", title: post.title, publication_date: post.created_at} }
+      end]
+    end
+    sent = []
+    original_post = Net::HTTP.method(:post)
+    silence_warnings do
+      Net::HTTP.define_singleton_method(:post) do |_uri, body, _headers|
+        sent.concat(JSON.parse(body)["urlList"])
+        Struct.new(:code).new("200")
+      end
+    end
+    Post.create!(id: 1, title: "Fresh", created_at: Time.utc(2026, 11, 24), updated_at: Time.utc(2026, 11, 24))
+    build
+    Post.create!(id: 2, title: "Fresher", created_at: Time.utc(2026, 11, 25), updated_at: Time.utc(2026, 11, 25))
+    build
+
+    refute_empty sent
+    sent.clear
+    Post.find(1).update_columns(created_at: Time.utc(2026, 11, 20))
+    build
+
+    assert_empty sent
+  ensure
+    silence_warnings { Net::HTTP.define_singleton_method(:post, &original_post) }
   end
 
   private
