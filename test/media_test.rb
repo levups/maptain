@@ -268,7 +268,11 @@ class MediaTest < MaptainTest
     assert_equal 120, Maptain::Xml.whole_number("0120")
     assert_nil Maptain::Xml.whole_number("0x5A")
     assert_equal 90, Maptain::Xml.whole_number(90.0)
-    assert_nil Maptain::Xml.whole_number(90.7)
+    assert_equal 91, Maptain::Xml.whole_number(90.7)
+    assert_equal 120, Maptain::Xml.whole_number(BigDecimal(120))
+    assert_equal 120, Maptain::Xml.whole_number(2.minutes)
+    assert_nil Maptain::Xml.whole_number(Float::INFINITY)
+    assert_nil Maptain::Xml.whole_number(:ninety)
   end
 
   def test_languages_sharing_a_url_write_the_media_one_of_them_has
@@ -308,6 +312,15 @@ class MediaTest < MaptainTest
   end
 
   def test_an_article_leaving_a_news_scope_is_not_sent_to_index_now_again
+    assert_empty news_resent_after_aging(second_id: 2)
+  end
+
+  def test_an_article_leaving_its_own_news_file_is_not_sent_to_index_now_again
+    assert_empty news_resent_after_aging(second_id: 5_000)
+  end
+
+  # The URLs IndexNow gets once the first of two articles leaves a two-day scope.
+  def news_resent_after_aging(second_id:)
     Maptain.configure do |config|
       config.index_now_key = "c1f0e2b4a6d84f3e9b7a5c3d1e0f2a4b"
       config.sources = [source("NewsSitemap") do
@@ -326,15 +339,14 @@ class MediaTest < MaptainTest
     end
     Post.create!(id: 1, title: "Fresh", created_at: Time.utc(2026, 11, 24), updated_at: Time.utc(2026, 11, 24))
     build
-    Post.create!(id: 2, title: "Fresher", created_at: Time.utc(2026, 11, 25), updated_at: Time.utc(2026, 11, 25))
+    Post.create!(id: second_id, title: "Fresher", created_at: Time.utc(2026, 11, 25), updated_at: Time.utc(2026, 11, 25))
     build
 
     refute_empty sent
     sent.clear
     Post.find(1).update_columns(created_at: Time.utc(2026, 11, 20))
     build
-
-    assert_empty sent
+    sent
   ensure
     silence_warnings { Net::HTTP.define_singleton_method(:post, &original_post) }
   end

@@ -73,6 +73,7 @@ module Maptain
       @tracking = @submit && @configuration.index_now_key && @previous.built_at.present?
       @diffing = @tracking && @previous.digest == @configuration.digest
       @moved_sources = Set.new
+      @news_sources = @configuration.sources.select { |source_class| source_class.definitions.key?(:news) }.to_set { |source_class| source_class.slug }
 
       llms_txt_sources = []
       @configuration.sources.each do |source_class|
@@ -86,7 +87,8 @@ module Maptain
       publish_index
       publish_llms_txt(llms_txt_by_name) if llms_txt_by_name
       deleted = (@previous.file_names | @previous.pending | @previous.extras.keys) - @manifest.file_names - @manifest.extras.keys
-      @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) })) if @diffing
+      # Not the pages of moved ranges, nor the articles of a news file gone because they grew old.
+      @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) || @news_sources.include?(previous_source_of(name)) })) if @diffing
       deleted.each { |name| @storage.delete(name) }
       publish_index_now_key
       urls = urls_to_submit

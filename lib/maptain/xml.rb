@@ -133,12 +133,14 @@ module Maptain
       (text.length > limit) ? text.grapheme_clusters.first(limit).join : text
     end
 
-    # An Integer, a whole Float, or a String of decimal digits, as an Integer; nil for anything else.
+    # A number of seconds as an Integer: any finite number rounded (a Float from video metadata, a BigDecimal
+    # column), an ActiveSupport::Duration, or a String of decimal digits; nil for anything else.
     def whole_number(value)
       case value
       when Integer then value
-      when Float then value.to_i if value.finite? && value == value.to_i
       when String then Integer(value, 10, exception: false)
+      when Numeric then value.to_f.round if value.to_f.finite?
+      else value.in_seconds.round if value.respond_to?(:in_seconds)
       end
     end
 
