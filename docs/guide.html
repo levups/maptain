@@ -245,6 +245,7 @@ bin/rails maptain:rebuild   <span class="c"># rewrite everything</span></code></
         <p>Crawlers look for the file at <code>/llms.txt</code> on each host. When the sitemaps are served from the site on one host, <code>public/llms.txt</code> is that already. Otherwise, with the sitemaps elsewhere (<code>config.sitemaps_url</code>) or one host per language, serve it from the app, which reads from <code>config.storage</code> the file of the host it is asked on:</p>
 <pre><code class="language-ruby"><span class="c1"># config/routes.rb</span>
 <span class="n">get</span> <span class="s2">"llms.txt"</span><span class="p">,</span> <span class="ss">to: </span><span class="no">Maptain</span><span class="o">::</span><span class="no">LlmsTxt</span><span class="o">::</span><span class="no">App</span><span class="p">.</span><span class="nf">new</span></code></pre>
+        <p>It picks the file from the <code>Host</code> header, never from <code>X-Forwarded-Host</code>, which a cache does not key responses by: behind a proxy, pass the original <code>Host</code> on.</p>
       </div>
     </section>
 

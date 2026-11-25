@@ -358,8 +358,10 @@ class LlmsTxtTest < MaptainTest
     assert_includes app.call("HTTP_HOST" => "EXAMPLE.com:443").last.join, "https://example.com/en/posts/1"
     assert_equal 404, app.call("HTTP_HOST" => "elsewhere.example.org").first
     assert_includes app.call("HTTP_HOST" => "example.fr.").last.join, "https://example.fr/fr/posts/1"
-    assert_includes app.call("HTTP_HOST" => "internal:3000", "HTTP_X_FORWARDED_HOST" => "example.fr").last.join,
-      "https://example.fr/fr/posts/1"
+    assert_includes app.call("HTTP_HOST" => "", "SERVER_NAME" => "example.fr").last.join, "https://example.fr/fr/posts/1"
+    # A forged X-Forwarded-Host must not get another host's file cached for this one.
+    assert_includes app.call("HTTP_HOST" => "example.com", "HTTP_X_FORWARDED_HOST" => "example.fr").last.join,
+      "https://example.com/en/posts/1"
   end
 
   def test_moving_to_one_host_per_language_replaces_the_single_file

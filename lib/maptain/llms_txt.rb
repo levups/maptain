@@ -126,7 +126,6 @@ module Maptain
       Cached = Struct.new(:content, :expires_at, :refreshing)
 
       def initialize
-        require "rack/request"
         @mutex = Mutex.new
         @cached_by_name = {}
       end
@@ -147,8 +146,10 @@ module Maptain
         return unless targets
         return targets.first.name if targets.one?
 
-        # The host Rails sees, X-Forwarded-Host included, without its port or a final dot.
-        request_host = Rack::Request.new(env).host.to_s.downcase.delete_suffix(".")
+        # The Host header, without its port or a final dot. Not X-Forwarded-Host: a cache keys a response by Host,
+        # so a forged X-Forwarded-Host would get another host's file cached for this one.
+        request_host = env["HTTP_HOST"].presence || env["SERVER_NAME"]
+        request_host = request_host.to_s.downcase.sub(/:\d+\z/, "").delete_suffix(".")
         targets.find { |target| URI(target.host).host&.downcase == request_host }&.name
       end
 

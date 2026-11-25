@@ -382,6 +382,9 @@ language, serve it from the app, which reads from `config.storage` the file of t
 get "llms.txt", to: Maptain::LlmsTxt::App.new
 ```
 
+It picks the file from the `Host` header, never from `X-Forwarded-Host`, which a cache does not key responses by:
+behind a proxy, pass the original `Host` on.
+
 ## Checking
 
 ```sh
