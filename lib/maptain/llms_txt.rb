@@ -13,8 +13,9 @@ module Maptain
     MAX_LINKS = 200
     # The most records read for one file: past it, a scope should pick the records of the file's language itself.
     MAX_RECORDS = 2_000
-    # How I18n.t begins what it gives for a key it does not have, unless told default: nil.
-    MISSING_TRANSLATION = "Translation missing"
+    # How I18n.t begins what it gives for a key it does not have, unless told default: nil: "Translation missing",
+    # "translation missing" before i18n 1.13.
+    MISSING_TRANSLATION = /\Atranslation missing/i
 
     Entry = Data.define(:section, :title, :url, :notes)
     # A file to write: its name, its language and the host it is for.
@@ -24,7 +25,7 @@ module Maptain
 
     # Text worth writing: neither blank nor a missing translation.
     def self.present?(text)
-      text.present? && !text.to_s.start_with?(MISSING_TRANSLATION)
+      text.present? && !text.to_s.match?(MISSING_TRANSLATION)
     end
 
     # title, summary and details: a String, or a block run in the language of the file. locale: the language of
@@ -124,6 +125,9 @@ module Maptain
       RETRY_SECONDS = 30
       CONTENT_TYPE = "text/plain; charset=utf-8"
 
+      # The storage could not be read and no copy is at hand: answered 503, never 404, since the file is not gone.
+      class StorageUnreachable < StandardError; end
+
       Cached = Struct.new(:content, :expires_at, :refreshing, :error)
 
       def initialize
@@ -137,69 +141,79 @@ module Maptain
         return [404, {"content-type" => CONTENT_TYPE}, ["Not Found"]] unless content
 
         [200, {"content-type" => CONTENT_TYPE, "cache-control" => "public, max-age=#{TTL_SECONDS}"}, [content]]
-      rescue # storage unreachable and no copy at hand: try again later, the file is not gone
+      rescue StorageUnreachable
         [503, {"content-type" => CONTENT_TYPE, "retry-after" => RETRY_SECONDS.to_s}, ["Service Unavailable"]]
       end
 
       private
 
+      # The file of the request's Host header, without a final dot. Not X-Forwarded-Host: a cache keys a response
+      # by Host, so a forged one would get another host's file cached for this one. The port tells apart hosts
+      # that share a name.
       def name_for(env)
         configuration = Maptain.configuration
         targets = configuration.llms_txt&.targets(configuration)
         return unless targets
         return targets.first.name if targets.one?
 
-        # The Host header, without its port or a final dot. Not X-Forwarded-Host: a cache keys a response by Host,
-        # so a forged X-Forwarded-Host would get another host's file cached for this one.
-        request_host = env["HTTP_HOST"].presence || env["SERVER_NAME"]
-        request_host = request_host.to_s.downcase.sub(/:\d+\z/, "").delete_suffix(".")
-        targets.find { |target| URI(target.host).host.downcase == request_host }&.name
+        name, port = (env["HTTP_HOST"].presence || env["SERVER_NAME"]).to_s.downcase.split(/:(?=\d+\z)/)
+        name = name.to_s.delete_suffix(".")
+        same_name = targets.select { |target| URI(target.host).host.downcase == name }
+        return same_name.first&.name if same_name.size < 2
+
+        same_name.find { |target| URI(target.host).port == (port&.to_i || URI(target.host).default_port) }&.name
       end
 
-      # Refreshed by the first request past expiry; a request that finds another one reading the file for the first
-      # time reads it too rather than answer that it does not exist, and one that finds the storage unreachable
-      # with no copy at hand gets the error again until the next try.
+      # Refreshed by the first request past expiry. While the storage is unreachable with no copy at hand, the
+      # others get the error until the next try; while a first read runs, they read the file too rather than
+      # answer that it does not exist.
       def cached_content(name)
-        cached, action = @mutex.synchronize do
+        cached, action, copy, error = @mutex.synchronize do
           entry = (@cached_by_name[name] ||= Cached.new(nil, 0, false, nil))
-          if !entry.refreshing && now >= entry.expires_at
+          action = if !entry.refreshing && now >= entry.expires_at
             entry.refreshing = true
-            [entry, :refresh]
-          elsif entry.content.nil? && entry.refreshing
-            [entry, :read]
+            :refresh
           elsif entry.content.nil? && entry.error
-            [entry, :error]
+            :error
+          elsif entry.content.nil? && entry.refreshing
+            :read
           else
-            [entry, :cached]
+            :cached
           end
+          [entry, action, entry.content, entry.error]
         end
         case action
         when :refresh then refresh(cached, name)
-        when :read then Maptain.configuration.storage.read(name)
-        when :error then raise cached.error
-        else cached.content
+        when :read then read(name)
+        when :error then raise StorageUnreachable, error.message
+        else copy
         end
       end
 
       # A file not there yet, before the first build, is asked for again after RETRY_SECONDS, not TTL_SECONDS.
       def refresh(cached, name)
-        content = Maptain.configuration.storage.read(name)
+        content = read(name)
         @mutex.synchronize do
           cached.content = content
           cached.error = nil
           cached.expires_at = now + (content ? TTL_SECONDS : RETRY_SECONDS)
         end
         content
-      rescue => error # storage unreachable: the copy at hand is served on, and the storage asked again soon
-        @mutex.synchronize do
-          cached.error = error
+      rescue StorageUnreachable => exception
+        copy = @mutex.synchronize do
+          cached.error = exception
           cached.expires_at = now + RETRY_SECONDS
+          cached.content
         end
-        raise unless cached.content
-
-        cached.content
+        copy || raise
       ensure
         @mutex.synchronize { cached.refreshing = false }
+      end
+
+      def read(name)
+        Maptain.configuration.storage.read(name)
+      rescue => exception # whatever the storage raises: a timeout, a refused connection, a 5xx
+        raise StorageUnreachable, exception.message
       end
 
       def now

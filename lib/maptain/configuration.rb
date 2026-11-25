@@ -66,9 +66,11 @@ module Maptain
       @index_now_key_location = path
     end
 
-    # The llms.txt of the site: {title:, summary:, details:, locale:}, or nil or false for none.
+    # The llms.txt of the site: {title:, summary:, details:, locale:}, String keys too, or nil or false for none.
     def llms_txt=(options)
-      @llms_txt = (LlmsTxt.new(**options) if options)
+      @llms_txt = (LlmsTxt.new(**options.to_h.transform_keys(&:to_sym)) if options)
+    rescue ArgumentError => exception
+      raise ConfigurationError, "llms_txt: #{exception.message}, it takes title:, summary:, details: and locale:"
     end
 
     def locales

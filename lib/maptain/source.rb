@@ -21,6 +21,8 @@ module Maptain
     UNSAFE = "[^#{URL_CHARACTERS}]|%(?![0-9A-Fa-f]{2})"
     UNSAFE_CHARACTER = Regexp.new(UNSAFE)
     UNSAFE_BYTE = Regexp.new(UNSAFE, Regexp::NOENCODING)
+    # Records loaded at once for the llms.txt: one more than it may list.
+    LLMS_TXT_BATCH = 201
 
     class << self
       def inherited(subclass)
@@ -136,7 +138,8 @@ module Maptain
     # The links this source adds to the llms.txt, in one language, and whether reading stopped at
     # LlmsTxt::MAX_RECORDS before the file was full. A record that does not exist in that language, or whose title
     # is blank or a missing translation, is left out. Its blocks, scope included, run in that language.
-    def llms_txt_entries(locale)
+    # seen_urls: the URLs the file lists already, from earlier sources; a URL listed again is skipped, not counted.
+    def llms_txt_entries(locale, seen_urls = Set.new)
       definition = definitions[:llms_txt]
       return [[], false] unless definition
 
@@ -148,17 +151,27 @@ module Maptain
 
         entries = []
         read = 0
+        cut_short = false
         each_llms_txt_record(definition[:scope]) do |record|
-          read += 1
+          # A record past MAX_RECORDS is not read: it only tells that some were left.
+          if (read += 1) > LlmsTxt::MAX_RECORDS
+            cut_short = true
+            break
+          end
           # Spelled as the record's languages spell it, as the sitemap does.
           record_locale = locales_of(record).find { |candidate| Xml.hreflang(candidate) == hreflang }
           url = record_locale && url_by_locale_of(record, [record_locale])[hreflang]
-          title, notes = url && speaking(locale) { Array(instance_exec(record, &definition[:entry])) }
-          entries << LlmsTxt::Entry.new(section:, title:, url:, notes:) if url && LlmsTxt.present?(title)
+          next unless url && !seen_urls.include?(url)
+
+          title, notes = speaking(locale) { Array(instance_exec(record, &definition[:entry])) }
+          next unless LlmsTxt.present?(title)
+
+          seen_urls << url
+          entries << LlmsTxt::Entry.new(section:, title:, url:, notes:)
           # One more than the file may list, for the build to warn about it.
-          break if entries.size > LlmsTxt::MAX_LINKS || read >= LlmsTxt::MAX_RECORDS
+          break if entries.size > LlmsTxt::MAX_LINKS
         end
-        [entries, read >= LlmsTxt::MAX_RECORDS && entries.size <= LlmsTxt::MAX_LINKS]
+        [entries, cut_short]
       end
     end
 
@@ -170,15 +183,23 @@ module Maptain
 
     # The records of the llms.txt, until the caller has enough: in batches of ids for a relation that names no
     # order, limit or offset, so that the file does not change with the database's order; otherwise as the relation
-    # says, never more than MAX_RECORDS rows. A block named, not forwarded: Ruby 3.3.0 rejects & inside a block.
+    # says, a page of BATCH at a time, never more than MAX_RECORDS + 1 rows. A block named, not forwarded: Ruby
+    # 3.3.0 rejects & inside a block.
     def each_llms_txt_record(scope, &block)
       records = scope ? instance_exec(&scope) : relation
       return records.each(&block) unless records.respond_to?(:find_each) && records.respond_to?(:order_values)
-      if records.order_values.empty? && !records.limit_value && !records.offset_value
-        return records.find_each(batch_size: LlmsTxt::MAX_LINKS + 1, &block)
-      end
+      return records.find_each(batch_size: LLMS_TXT_BATCH, &block) if records.order_values.empty? && !records.limit_value && !records.offset_value
 
-      records.limit([records.limit_value, LlmsTxt::MAX_RECORDS].compact.min).each(&block)
+      wanted = [records.limit_value, LlmsTxt::MAX_RECORDS + 1].compact.min
+      first = records.offset_value || 0
+      done = 0
+      while done < wanted
+        page = records.offset(first + done).limit([LLMS_TXT_BATCH, wanted - done].min).to_a
+        page.each(&block)
+        break if page.size < [LLMS_TXT_BATCH, wanted - done].min
+
+        done += page.size
+      end
     end
 
     def locales_of(record)

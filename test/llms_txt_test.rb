@@ -453,6 +453,95 @@ class LlmsTxtTest < MaptainTest
     assert_raises(Maptain::SourceError) { Class.new(Maptain::Source) { llms_txt("Posts", scope: Post.all) { "Post" } } }
   end
 
+  def test_a_url_listed_again_does_not_count_against_the_limit
+    Post.insert_all((1..300).map { |id| {id:, title: "Post #{id}", created_at: LONG_AGO, updated_at: LONG_AGO} })
+    Maptain.configuration.sources = [source("JoinedPostSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      llms_txt("Posts", scope: -> { Post.joins("CROSS JOIN (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3)").order(:id) }) { |post| post.title }
+    end]
+    warnings = build.warnings
+
+    assert_equal 200, storage.content_by_name.fetch("llms.txt").scan(/^- /).size
+    assert(warnings.any? { |warning| warning.message.include?("more than 200 links") })
+  end
+
+  def test_a_scope_ending_at_max_records_is_not_cut_short
+    Post.insert_all((1..2_000).map { |id| {id:, title: "Post #{id}", languages: "fr", created_at: LONG_AGO, updated_at: LONG_AGO} })
+    Maptain.configuration.sources = [source("AllPostSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      locales { |post| post.languages.split(",").map(&:to_sym) }
+      llms_txt("Posts") { |post| post.title }
+    end]
+
+    refute(build.warnings.any? { |warning| warning.message.include?("records without filling") })
+  end
+
+  def test_an_ordered_scope_is_read_a_page_at_a_time
+    Post.insert_all((1..1_000).map { |id| {id:, title: "Post #{id}", languages: "fr", created_at: LONG_AGO, updated_at: LONG_AGO} })
+    source = source("OrderedPostSitemap") do
+      scope { Post.published }
+      url { |post, locale| post_url(post, locale:) }
+      locales { |post| post.languages.split(",").map(&:to_sym) }
+      llms_txt("Posts", scope: -> { Post.order(:title) }) { |post| post.title }
+    end
+    largest = 0
+    counting = ->(*, payload) { largest = [largest, payload[:record_count]].max if payload[:class_name] == "Post" }
+    ActiveSupport::Notifications.subscribed(counting, "instantiation.active_record") { source.new(Maptain.configuration).llms_txt_entries(:en) }
+
+    assert_equal 201, largest
+  end
+
+  def test_hosts_that_differ_by_port_get_their_own_file
+    Maptain.configure do |config|
+      config.host = "http://localhost:3000"
+      config.host_by_locale = {fr: "http://localhost:3001"}
+    end
+    create_post(1)
+    build
+    app = Maptain::LlmsTxt::App.new
+
+    assert_includes app.call("HTTP_HOST" => "localhost:3001").last.join, "http://localhost:3001/fr/posts/1"
+    assert_includes app.call("HTTP_HOST" => "localhost:3000").last.join, "http://localhost:3000/en/posts/1"
+  end
+
+  def test_a_lowercase_missing_translation_is_left_out
+    refute Maptain::LlmsTxt.present?("translation missing: en.llms_txt.title")
+    assert Maptain::LlmsTxt.present?("Translations")
+  end
+
+  def test_requests_during_a_retry_after_a_failure_get_503_without_reading
+    reads = 0
+    storage.define_singleton_method(:read) do |_name|
+      reads += 1
+      raise IOError, "unreachable"
+    end
+    app = Maptain::LlmsTxt::App.new
+    app.call({})
+    app.instance_variable_get(:@cached_by_name).fetch("llms.txt").refreshing = true
+    app.instance_variable_get(:@cached_by_name).fetch("llms.txt").expires_at = Float::INFINITY
+
+    assert_equal 503, app.call({}).first
+    assert_equal 1, reads
+  end
+
+  def test_a_configuration_mistake_is_raised_not_answered_503
+    Maptain.configuration.host_by_locale = {fr: "https://example.fr"}
+    Maptain.configuration.llms_txt = {title: "Example", locale: :de}
+
+    assert_raises(Maptain::ConfigurationError) { Maptain::LlmsTxt::App.new.call("HTTP_HOST" => "example.fr") }
+  end
+
+  def test_string_keys_are_read_and_unknown_ones_refused
+    Maptain.configuration.llms_txt = {"title" => "Example"}
+    create_post(1)
+    build
+
+    assert storage.content_by_name.fetch("llms.txt").start_with?("# Example\n")
+    assert_raises(Maptain::ConfigurationError) { Maptain.configuration.llms_txt = {title: "Example", sumary: "typo"} }
+  end
+
   private
 
   def source(name, &definition)

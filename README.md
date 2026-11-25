@@ -366,7 +366,7 @@ end
 Its links come from the `url` block, in the language of the file, where the `scope:` and title blocks run too.
 Records that do not exist in that language, or whose title is blank or a missing translation, are left out.
 Records are read in id order until the file is full, a scope with its own order, limit or offset as it says, and
-never more than 2,000 for a file: past that a build warns, and `scope:` should pick the records of the file's
+never more than 2,000 per source and file: past that a build warns, and `scope:` should pick the records of the file's
 language. The first 200 links are listed. A subclass does not inherit its parent's `llms_txt`. The file is
 `llms.txt`, next to `sitemap.xml`, rewritten only when it changes, and deleted when the setting goes away.
 

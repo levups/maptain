@@ -252,14 +252,15 @@ module Maptain
       llms_txt = @configuration.llms_txt
       llms_txt.targets(@configuration).to_h do |target|
         location = "#{@configuration.sitemaps_url}/#{target.name}"
+        seen_urls = Set.new
         entries = sources.flat_map do |source|
-          source_entries, cut_short = source.llms_txt_entries(target.locale)
+          source_entries, cut_short = source.llms_txt_entries(target.locale, seen_urls)
           if cut_short
             warn(source.slug, location, "read #{LlmsTxt::MAX_RECORDS} records without filling #{target.name}: " \
-              "give llms_txt a scope: with the records of its language")
+              "give its llms_txt a scope: with the records of that language")
           end
           source_entries
-        end.uniq(&:url)
+        end
         check_llms_txt(target.name, location, entries)
         [target.name, llms_txt.render(entries.first(LlmsTxt::MAX_LINKS), target.locale, target.host)]
       end
