@@ -147,6 +147,22 @@ class LlmsTxtTest < MaptainTest
     assert_empty storage.writes
   end
 
+  def test_the_app_serves_the_file_from_the_storage
+    create_post(1)
+    build
+    status, headers, body = Maptain::LlmsTxt::App.new.call({})
+
+    assert_equal 200, status
+    assert_equal "text/plain; charset=utf-8", headers["content-type"]
+    assert_equal storage.content_by_name.fetch("llms.txt"), body.join
+  end
+
+  def test_the_app_answers_404_before_the_first_build
+    status, _headers, _body = Maptain::LlmsTxt::App.new.call({})
+
+    assert_equal 404, status
+  end
+
   def test_a_title_is_required
     assert_raises(Maptain::ConfigurationError) { Maptain.configuration.llms_txt = {title: ""} }
   end

@@ -365,9 +365,15 @@ end
 
 Its links come from the `url` block, in the language of the file, and records that do not exist in that language
 are left out. The file is `llms.txt`, next to `sitemap.xml`, rewritten only when it changes, and deleted when the
-setting goes away. Crawlers look for it at the root of the site: when the sitemaps are served from elsewhere
-(`config.sitemaps_url`), redirect `/llms.txt` there. With one host per language, the file is written once, in its
-language, for every host.
+setting goes away. With one host per language, the file is written once, in its language, for every host.
+
+Crawlers look for it at the root of the site. When the sitemaps are served from elsewhere (`config.sitemaps_url`),
+serve it from the app, which reads it from `config.storage` on every host:
+
+```ruby
+# config/routes.rb
+get "llms.txt", to: Maptain::LlmsTxt::App.new
+```
 
 ## Checking
 

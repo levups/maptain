@@ -64,5 +64,19 @@ module Maptain
     def line(text)
       text.to_s.gsub(/[[:space:]]+/, " ").strip
     end
+
+    # Serves the file at the root of the site when the sitemaps live elsewhere (config.sitemaps_url), where
+    # crawlers do not look for it. In config/routes.rb: get "llms.txt", to: Maptain::LlmsTxt::App.new
+    # It reads the file from config.storage, on every host of the site.
+    class App
+      HEADERS = {"content-type" => "text/plain; charset=utf-8", "cache-control" => "public, max-age=3600"}.freeze
+
+      def call(_env)
+        content = Maptain.configuration.storage.read(NAME)
+        return [404, {"content-type" => "text/plain; charset=utf-8"}, ["Not Found"]] unless content
+
+        [200, HEADERS.dup, [content]]
+      end
+    end
   end
 end
