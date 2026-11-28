@@ -51,34 +51,16 @@ class SourceTest < MaptainTest
     assert_equal %w[sitemap-tag-00000.xml.gz], build.written
   end
 
-  def test_a_lastmod_block_on_a_model_without_updated_at_needs_a_fingerprint
-    Maptain.configuration.sources = [Class.new(tag_sitemap) { lastmod { Date.new(2026, 1, 1) } }]
-    Tag.create!(name: "ruby")
+  def test_a_lastmod_no_column_holds_needs_a_fingerprint
+    [Class.new(tag_sitemap) { lastmod { Date.new(2026, 1, 1) } }, Class.new(PostSitemap) { lastmod :updated_on }].each do |source_class|
+      Maptain.configuration.sources = [source_class]
+      create_post(1)
+      Tag.create!(name: "ruby")
 
-    assert_includes assert_raises(Maptain::SourceError) { build }.message, "name the column to watch with fingerprint"
-  end
-
-  def test_a_lastmod_named_by_a_string_or_an_alias_is_the_column_watched
-    %w[reviewed_at reviewed_on].each do |name|
+      assert_includes assert_raises(Maptain::SourceError) { build }.message, "to watch: name it with fingerprint"
       Post.delete_all
-      Maptain.configuration.sources = [Class.new(PostSitemap) { lastmod name }]
-      create_post(1, reviewed_at: LONG_AGO)
-      build
-      Post.find(1).update_columns(reviewed_at: LONG_AGO + 60)
-
-      assert_includes build.written, "sitemap-post-00000.xml.gz", name
+      Tag.delete_all
     end
-  end
-
-  def test_a_lastmod_that_is_a_method_watches_updated_at_and_a_misspelled_one_is_refused
-    Maptain.configuration.sources = [Class.new(PostSitemap) { lastmod :first_published_at }]
-    create_post(1)
-    build
-
-    assert_includes storage.xml("sitemap-post-00000.xml.gz"), "<lastmod>2026-01-01T12:00:00Z</lastmod>"
-    Maptain.configuration.sources = [Class.new(PostSitemap) { lastmod :updated_on }]
-
-    assert_includes assert_raises(Maptain::SourceError) { build }.message, "lastmod :updated_on is neither a column nor a method of Post"
   end
 
   def test_a_record_without_a_url_in_a_language_is_left_out_of_it

@@ -395,24 +395,17 @@ module Maptain
       end
     end
 
-    # The latest change of a range: the lastmod column, else updated_at, which a block or a method may read. nil for
-    # a model without updated_at and a lastmod left as it is: its ranges then change with their ids alone, like a
-    # record changed with update_columns, until the next full build.
+    # nil for a model without updated_at and a lastmod left as it is: its ranges then change with their ids alone.
     def fingerprint_sql
-      return Arel.sql("MAX(#{definitions[:fingerprint]})") if definitions[:fingerprint]
+      column = definitions[:lastmod].is_a?(Symbol) ? definitions[:lastmod] : :updated_at
+      expression = definitions[:fingerprint] ||
+        ("#{model.quoted_table_name}.#{model.adapter_class.quote_column_name(column)}" if model.column_names.include?(column.to_s))
+      return Arel.sql("MAX(#{expression})") if expression
+      # A date the pages show but no column holds: nothing would tell a build that it moved.
+      return unless column != :updated_at || definitions[:lastmod].respond_to?(:call) ||
+        model.attribute_names.include?("updated_at") || model.method_defined?(:updated_at)
 
-      lastmod = definitions[:lastmod]
-      named = lastmod.to_s if lastmod.is_a?(Symbol) || lastmod.is_a?(String)
-      column = [named, "updated_at"].filter_map { |name| model.attribute_alias(name) || name if name }
-        .find { |name| model.column_names.include?(name) }
-      if named && named != "updated_at" && column != (model.attribute_alias(named) || named) && !model.method_defined?(named)
-        raise SourceError, "#{self.class.name}'s lastmod #{lastmod.inspect} is neither a column nor a method of #{model.name}"
-      end
-      return Arel.sql("MAX(#{model.quoted_table_name}.#{model.adapter_class.quote_column_name(column)})") if column
-      return if lastmod.nil? || named == "updated_at"
-
-      raise SourceError, "#{self.class.name}'s lastmod #{lastmod.respond_to?(:call) ? "block" : lastmod.inspect} " \
-        "is not a column of #{model.name}, which has no updated_at: name the column to watch with fingerprint"
+      raise SourceError, "#{self.class.name || slug}'s lastmod has no column of #{model.table_name} to watch: name it with fingerprint"
     end
   end
 end
