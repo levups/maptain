@@ -135,7 +135,10 @@ module Maptain
       # The sum of the ids moves when a record leaves a range and another enters it; the shard size, when the
       # ranges themselves move. Summed as offsets within the range: SQLite's SUM overflows on large ids.
       offset_sum = Arel.sql("SUM(#{model.quoted_table_name}.#{model.quoted_primary_key} % #{shard_size})")
-      relation.reorder(nil).group(shard_sql).pluck(*[shard_sql, Arel.sql("COUNT(*)"), offset_sum, fingerprint_sql].compact)
+      latest_sql = fingerprint_sql
+      return relation.reorder(nil).group(shard_sql).pluck(shard_sql).to_h { |shard| [shard.to_i.to_s, nil] } unless latest_sql
+
+      relation.reorder(nil).group(shard_sql).pluck(shard_sql, Arel.sql("COUNT(*)"), offset_sum, latest_sql)
         .to_h { |shard, count, sum, latest| [shard.to_i.to_s, "#{shard_size}/#{count}/#{sum.to_i}/#{precise(latest)}"] }
     end
 
@@ -395,14 +398,17 @@ module Maptain
       end
     end
 
-    # nil for a model without the updated_at a source reads by default: its ranges change with their ids alone.
+    # The latest change of a range, or nil when no column holds it (a model without updated_at, a lastmod that is a
+    # method): its ranges are then rendered at each build, and their files uploaded when they differ.
     def fingerprint_sql
-      column = definitions[:lastmod].is_a?(Symbol) ? definitions[:lastmod] : :updated_at
-      return if !definitions[:fingerprint] && column == :updated_at && !model.column_names.include?("updated_at")
+      return Arel.sql("MAX(#{definitions[:fingerprint]})") if definitions[:fingerprint]
 
-      expression = definitions[:fingerprint] ||
-        "#{model.quoted_table_name}.#{model.adapter_class.quote_column_name(column)}"
-      Arel.sql("MAX(#{expression})")
+      lastmod = definitions[:lastmod]
+      column = (lastmod.is_a?(Symbol) || lastmod.is_a?(String)) ? lastmod.to_s : "updated_at"
+      column = model.attribute_alias(column) || column
+      return unless model.column_names.include?(column)
+
+      Arel.sql("MAX(#{model.quoted_table_name}.#{model.adapter_class.quote_column_name(column)})")
     end
   end
 end
