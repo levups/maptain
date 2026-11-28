@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-28
+
+A build that dies midway is fully repaired by the next one, models without `updated_at` build, and IndexNow only hears about pages that changed.
+
+**Breaking**
+- A build refuses two sources sharing a slug, a list source and a relation source with the same slug included, which used to build.
+- A `lastmod` block or method on a model without `updated_at` needs a `fingerprint`.
+- A misspelled `lastmod` column raises a `SourceError` asking for a `fingerprint`, instead of an SQL error.
+- Sources are found among named classes only: list an anonymous `Class.new(Maptain::Source)` in `config.sources`.
+
+**Fixed**
+- A build that died midway is repaired by the next one: files it started to rewrite or delete are written again, and the IndexNow URLs it had found (up to 10,000) are sent.
+- Sources on models without `updated_at` build; their pages have no `lastmod`.
+- Two sources with the same slug are refused before anything is written, instead of crashing midway. A source listed twice is built once, and sources unloaded by a Rails reload are no longer found.
+- A `lastmod` column named by a String is watched like a Symbol.
+- Action Text bodies in video, news and llms.txt fields are written as text, not HTML. A binary or invalid UTF-8 llms.txt title no longer stops the build.
+- IndexNow is no longer sent unchanged pages when `shard_size` gets smaller, a range drops a file, or a list source becomes a relation (or back).
+
 ## [0.2.0] — 2026-11-25
 
 Sitemaps for videos and Google News, and the site's llms.txt, written by the same build.
@@ -22,6 +40,7 @@ First release: XML sitemaps for Rails sites in many languages, rebuilt in millis
 - IndexNow submissions of the pages that appeared, changed or disappeared, which never fail a build.
 - Checks without a single HTTP request: encoded URLs, W3C dates, hreflang codes, one line per repeated warning.
 
-[Unreleased]: https://github.com/levups/maptain/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/levups/maptain/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/levups/maptain/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/levups/maptain/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/levups/maptain/releases/tag/v0.1.0
