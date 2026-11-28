@@ -64,9 +64,10 @@ module Maptain
       end
 
       # A column, or a block for anything else. With a block on a relation, name what changes with it in
-      # `fingerprint`: the column alone no longer tells a build what moved.
+      # `fingerprint`: the column alone no longer tells a build what moved. A column named by a String is the
+      # same column: the ranges watch it.
       def lastmod(column = nil, &block)
-        definitions[:lastmod] = block || column
+        definitions[:lastmod] = block || (column.is_a?(String) ? column.to_sym : column)
       end
 
       def images(&block)
