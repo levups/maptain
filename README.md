@@ -278,10 +278,10 @@ end
 
 A source named `ProductSitemap` writes `sitemap-product-00000.xml.gz`, `sitemap-product-00001.xml.gz` and so
 on, one per range of ids; `slug "products"` changes the middle part, `config.filename` the first. Each source
-needs a slug of its own, which a subclass does not inherit: a build refuses two sources with the same, such as
-`ProductSitemap` and `Admin::ProductSitemap`. The size of a
-range comes from the number of languages, so that a file stays under 50,000 URLs and 50 MiB: 50,000 ids with one
-language, 554 with 24. `shard_size 1_000` sets it yourself. A range that still outgrows a file continues in
+needs a slug of its own: a build refuses two sources with the same slug, such as `ProductSitemap` and
+`Admin::ProductSitemap`, or a source and a subclass that inherits its `slug`. The size of a range comes from the
+number of languages, so that a file stays under 50,000 URLs and 50 MiB: 50,000 ids with one language, 554 with 24.
+`shard_size 1_000` sets it yourself. A range that still outgrows a file continues in
 `sitemap-product-00000-2.xml.gz`.
 
 `sitemap.xml` is the index. It lists every file with the latest `lastmod` it holds, so a crawler fetches again

@@ -33,9 +33,8 @@ module Maptain
     class << self
       def inherited(subclass)
         super
-        # A subclass lists its own records in the llms.txt, or none, and writes files of its own: inherited, the same
-        # links would come twice, and two sources would write the same files.
-        subclass.instance_variable_set(:@definitions, definitions.except(:llms_txt, :slug))
+        # A subclass lists its own records in the llms.txt, or none: inherited, the same links would come twice.
+        subclass.instance_variable_set(:@definitions, definitions.except(:llms_txt))
       end
 
       def definitions

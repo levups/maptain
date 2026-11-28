@@ -51,33 +51,23 @@ class ConfigurationTest < MaptainTest
     assert_nil Maptain.configuration.index_now_key_location
   end
 
-  module Admin
-    class PostSitemap < Maptain::Source
-      scope { Post.all }
-      url { |post, locale| "/admin/#{locale}/posts/#{post.id}" }
-    end
-  end
-
-  class ArticleSitemap < ::PostSitemap
-    slug "articles"
-  end
-
-  class DraftArticleSitemap < ArticleSitemap
-  end
-
   def test_two_sources_with_the_same_slug_are_refused_before_anything_is_written
-    Maptain.configuration.sources = [PostSitemap, Admin::PostSitemap]
+    admin = Module.new
+    ConfigurationTest.const_set(:Admin, admin)
+    admin.const_set(:PostSitemap, Class.new(PageSitemap))
+    articles = Class.new(PostSitemap) { slug "articles" }
+    ConfigurationTest.const_set(:ArticleSitemap, articles)
+    ConfigurationTest.const_set(:DraftArticleSitemap, Class.new(articles))
+    Maptain.configuration.sources = [PostSitemap, Admin::PostSitemap, PostSitemap]
 
-    assert_equal 'PostSitemap and ConfigurationTest::Admin::PostSitemap share the slug "post", which names their files: ' \
-      "give one a slug of its own", assert_raises(Maptain::ConfigurationError) { build }.message
-    assert_empty storage.writes
-  end
-
-  def test_a_subclass_writes_files_of_its_own
-    create_post(1)
+    assert_equal 'PostSitemap, ConfigurationTest::Admin::PostSitemap share the slug "post", which names their files: ' \
+      "give each a slug of its own", assert_raises(Maptain::ConfigurationError) { build }.message
     Maptain.configuration.sources = [ArticleSitemap, DraftArticleSitemap]
 
-    assert_equal %w[sitemap-articles-00000.xml.gz sitemap-draft_article-00000.xml.gz], build.written
+    assert_includes assert_raises(Maptain::ConfigurationError) { build }.message, 'share the slug "articles"'
+    assert_empty storage.writes
+  ensure
+    %i[Admin ArticleSitemap DraftArticleSitemap].each { |name| ConfigurationTest.send(:remove_const, name) if ConfigurationTest.const_defined?(name, false) }
   end
 
   def test_a_build_without_a_host_says_so

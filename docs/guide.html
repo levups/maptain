@@ -180,7 +180,7 @@
     <section id="files" aria-labelledby="files-title">
       <h2 id="files-title">Files</h2>
       <div class="prose">
-        <p>A source named <code>ProductSitemap</code> writes <code>sitemap-product-00000.xml.gz</code>, <code>sitemap-product-00001.xml.gz</code> and so on, one per range of ids. <code>slug "products"</code> changes the middle part, <code>config.filename</code> the first. Each source needs a slug of its own, which a subclass does not inherit: a build refuses two sources with the same, such as <code>ProductSitemap</code> and <code>Admin::ProductSitemap</code>.</p>
+        <p>A source named <code>ProductSitemap</code> writes <code>sitemap-product-00000.xml.gz</code>, <code>sitemap-product-00001.xml.gz</code> and so on, one per range of ids. <code>slug "products"</code> changes the middle part, <code>config.filename</code> the first. Each source needs a slug of its own: a build refuses two sources with the same slug, such as <code>ProductSitemap</code> and <code>Admin::ProductSitemap</code>, or a source and a subclass that inherits its <code>slug</code>.</p>
         <p>The size of a range comes from the number of languages, so that a file stays under the 50,000 URLs and 50 MiB the protocol allows: 50,000 ids with one language, 554 with 24. <code>shard_size 1_000</code> sets it yourself. A range that still outgrows a file continues in <code>sitemap-product-00000-2.xml.gz</code>.</p>
         <p><code>sitemap.xml</code> is the index. It lists every file with the latest <code>lastmod</code> it holds, so a crawler fetches again only the files that changed.</p>
       </div>
