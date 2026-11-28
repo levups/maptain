@@ -174,15 +174,17 @@ module Maptain
       gone ? (urls - previous_urls).to_a + (previous_urls - urls).to_a : (urls - previous_urls).to_a
     end
 
-    # Whether the size of the ranges, the first part of their fingerprints, is not the one the last build stored:
-    # every range then holds other ids, those it did not have before included.
+    # Whether the size of the ranges, the first part of their fingerprints, is not the one the last build stored,
+    # or the source went from one file to ranges or back: its pages then sit in other files, which held other ids.
     def ranges_moved?(source_slug, fingerprint_by_shard)
-      sizes = fingerprint_by_shard.values.filter_map { |fingerprint| fingerprint&.split("/")&.first }
-      # A range fingerprint starts with its size; the digest of a source rendered whole has no "/".
-      stored = @previous.shards_by_source.fetch(source_slug, {}).values.filter_map do |shard|
-        shard["fingerprint"].to_s.split("/").first if shard["fingerprint"].to_s.include?("/")
-      end
+      sizes = fingerprint_by_shard.map { |shard, fingerprint| range_size(shard, fingerprint) }
+      stored = @previous.shards_by_source.fetch(source_slug, {}).map { |shard, stored_shard| range_size(shard, stored_shard["fingerprint"]) }
       sizes.any? && (stored - sizes).any?
+    end
+
+    # A range fingerprint starts with its size; a source rendered whole is one file, whatever its digest.
+    def range_size(shard, fingerprint)
+      (shard == Source::WHOLE) ? Source::WHOLE : fingerprint.to_s.split("/").first
     end
 
     def publish_rendered(changed_names)
