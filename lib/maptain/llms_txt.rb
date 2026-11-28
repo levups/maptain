@@ -27,7 +27,8 @@ module Maptain
 
     # Text worth writing: neither blank nor a missing translation.
     def self.present?(text)
-      return false if text.blank?
+      # A String is read through Xml.text alone: blank? raises on one that is not valid UTF-8.
+      return false if !text.is_a?(String) && text.blank?
 
       string = Xml.text(text)
       string.present? && !string.match?(MISSING_TRANSLATION)
