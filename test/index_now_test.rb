@@ -207,6 +207,19 @@ class IndexNowTest < MaptainTest
     assert_equal 0, build.submitted
   end
 
+  def test_a_list_source_becoming_a_relation_source_or_back_sends_nothing_that_did_not_change
+    listed = Class.new(PostSitemap) { scope { Post.published.order(:id).to_a } }
+    Maptain.configuration.sources = [listed]
+    (1..2).each { |id| create_post(id) }
+    build
+    Maptain.configuration.sources = [PostSitemap]
+
+    assert_equal 0, build.submitted
+    Maptain.configuration.sources = [listed]
+
+    assert_equal 0, build.submitted
+  end
+
   def test_pages_moving_back_into_the_first_file_of_their_range_are_not_sent_and_those_of_a_dropped_file_are
     max_urls = Maptain::ShardWriter::MAX_URLS_PER_FILE
     silence_warnings { Maptain::ShardWriter.const_set(:MAX_URLS_PER_FILE, 4) }
