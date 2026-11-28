@@ -51,6 +51,25 @@ class SourceTest < MaptainTest
     assert_equal %w[sitemap-tag-00000.xml.gz], build.written
   end
 
+  def test_a_lastmod_column_named_by_a_string_is_watched_like_a_symbol
+    reviewed_post = Class.new(ActiveRecord::Base) do
+      self.table_name = "posts"
+      self.ignored_columns = %w[updated_at]
+    end
+    create_post(1, reviewed_at: LONG_AGO)
+    Maptain.configuration.sources = [Class.new(PostSitemap) {
+      scope { reviewed_post.all }
+      locales { [:en] }
+      lastmod "reviewed_at"
+    }]
+    build
+
+    assert_includes storage.xml("sitemap-post-00000.xml.gz"), "<lastmod>2026-01-01T12:00:00Z</lastmod>"
+    Post.update_all(reviewed_at: LONG_AGO + 60)
+
+    assert_equal %w[sitemap-post-00000.xml.gz], build.written
+  end
+
   def test_a_lastmod_no_column_holds_needs_a_fingerprint
     dated_tag = Class.new(ActiveRecord::Base) do
       self.table_name = "tags"
