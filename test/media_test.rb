@@ -247,6 +247,16 @@ class MediaTest < MaptainTest
       "<video:title>café</video:title><video:description>Rich  text</video:description>"
   end
 
+  def test_any_other_object_is_written_as_its_to_s
+    episode = Struct.new(:number) do
+      def to_s
+        "Episode #{number}"
+      end
+    end
+
+    assert_equal "Episode 3", Maptain::Xml.text(episode.new(3))
+  end
+
   def test_a_news_block_returning_a_list_is_warned_about
     Maptain.configuration.sources = [source("NewsSitemap") do
       scope { Post.published }
