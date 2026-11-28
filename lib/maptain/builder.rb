@@ -149,10 +149,11 @@ module Maptain
         writer.close
       end
 
+      # A file dropped from a range is a change too, even when the files left are as they were.
+      unchanged = writer.files.all? { |file| same_as_before?(file) }
+      changed_urls.clear if unchanged
       stored_names = @previous.shard(source.slug, shard)&.fetch("files")&.map { |file| file["name"] } || []
-      if writer.files.all? { |file| same_as_before?(file) } && writer.files.map(&:name) == stored_names
-        changed_urls.clear
-      elsif urls
+      if urls && !(unchanged && writer.files.map(&:name) == stored_names)
         changed_urls.concat(appeared_or_gone(source.slug, shard, urls, gone: !source.news?))
       end
       fingerprint ||= writer.content_digest
