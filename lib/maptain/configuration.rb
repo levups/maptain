@@ -43,6 +43,7 @@ module Maptain
 
     # Checked when a build starts, not when host_by_locale or llms_txt is set: locales may be set after them.
     def validate!
+      host!
       llms_txt&.locale_in(self)
       sources.uniq.group_by(&:slug).each do |slug, same_slug|
         next if same_slug.one?
