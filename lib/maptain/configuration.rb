@@ -48,7 +48,7 @@ module Maptain
       sources.uniq.group_by(&:slug).each do |slug, same_slug|
         next if same_slug.one?
 
-        raise ConfigurationError, "#{same_slug.map { |source_class| source_class.name || "a subclass of #{source_class.ancestors.find(&:name)}" }.join(", ")} " \
+        raise ConfigurationError, "#{same_slug.map { |source_class| source_class.name || "a subclass of #{source_class.superclass.name || source_class.superclass.slug}" }.join(", ")} " \
           "share the slug #{slug.inspect}, which names their files: give each a slug of its own"
       end
       hreflangs = locales.map { |locale| Xml.hreflang(locale) }
