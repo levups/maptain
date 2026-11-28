@@ -149,7 +149,8 @@ module Maptain
         writer.close
       end
 
-      if writer.files.all? { |file| same_as_before?(file) }
+      stored_names = @previous.shard(source.slug, shard)&.fetch("files")&.map { |file| file["name"] } || []
+      if writer.files.all? { |file| same_as_before?(file) } && writer.files.map(&:name) == stored_names
         changed_urls.clear
       elsif urls
         changed_urls.concat(appeared_or_gone(source.slug, shard, urls, gone: !source.news?))
@@ -176,7 +177,10 @@ module Maptain
     # every range then holds other ids, those it did not have before included.
     def ranges_moved?(source_slug, fingerprint_by_shard)
       sizes = fingerprint_by_shard.values.filter_map { |fingerprint| fingerprint&.split("/")&.first }
-      stored = @previous.shards_by_source.fetch(source_slug, {}).values.map { |shard| shard["fingerprint"].to_s.split("/").first }
+      # A range fingerprint starts with its size; the digest of a source rendered whole has no "/".
+      stored = @previous.shards_by_source.fetch(source_slug, {}).values.filter_map do |shard|
+        shard["fingerprint"].to_s.split("/").first if shard["fingerprint"].to_s.include?("/")
+      end
       sizes.any? && (stored - sizes).any?
     end
 
