@@ -45,7 +45,7 @@ module Maptain
     def validate!
       host!
       llms_txt&.locale_in(self)
-      sources.uniq.group_by(&:slug).each do |slug, same_slug|
+      sources.group_by(&:slug).each do |slug, same_slug|
         next if same_slug.one?
 
         raise ConfigurationError, "#{same_slug.map { |source_class| source_class.name || "an anonymous source" }.join(", ")} " \
@@ -90,7 +90,7 @@ module Maptain
     end
 
     def sources
-      return @sources if @sources
+      return @sources.uniq if @sources
 
       load_sources.call
       Source.descendants.select(&:scope?).sort_by(&:slug)

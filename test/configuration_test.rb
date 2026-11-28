@@ -62,12 +62,20 @@ class ConfigurationTest < MaptainTest
 
     assert_equal 'PostSitemap, ConfigurationTest::Admin::PostSitemap share the slug "post", which names their files: ' \
       "give each a slug of its own", assert_raises(Maptain::ConfigurationError) { build }.message
+    assert_empty storage.writes
     Maptain.configuration.sources = [ArticleSitemap, DraftArticleSitemap]
 
     assert_includes assert_raises(Maptain::ConfigurationError) { build }.message, 'share the slug "articles"'
     assert_empty storage.writes
   ensure
     %i[Admin ArticleSitemap DraftArticleSitemap].each { |name| ConfigurationTest.send(:remove_const, name) if ConfigurationTest.const_defined?(name, false) }
+  end
+
+  def test_a_source_listed_twice_is_built_once
+    create_post(1)
+    Maptain.configuration.sources = [PostSitemap, PageSitemap, PostSitemap]
+
+    assert_equal %w[sitemap-post-00000.xml.gz sitemap-page.xml.gz], build.written
   end
 
   def test_a_build_without_a_host_says_so
