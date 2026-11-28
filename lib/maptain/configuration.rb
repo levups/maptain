@@ -43,7 +43,14 @@ module Maptain
 
     # Checked when a build starts, not when host_by_locale or llms_txt is set: locales may be set after them.
     def validate!
+      host!
       llms_txt&.locale_in(self)
+      sources.group_by(&:slug).each do |slug, same_slug|
+        next if same_slug.one?
+
+        raise ConfigurationError, "#{same_slug.map { |source_class| source_class.name || "an anonymous source" }.join(" and ")} " \
+          "share the slug #{slug.inspect}, which names their files: give one a slug of its own"
+      end
       hreflangs = locales.map { |locale| Xml.hreflang(locale) }
       unknown = host_by_locale.keys - hreflangs
       return if unknown.empty?

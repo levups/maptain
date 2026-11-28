@@ -51,6 +51,35 @@ class ConfigurationTest < MaptainTest
     assert_nil Maptain.configuration.index_now_key_location
   end
 
+  module Admin
+    class PostSitemap < Maptain::Source
+      scope { Post.all }
+      url { |post, locale| "/admin/#{locale}/posts/#{post.id}" }
+    end
+  end
+
+  class ArticleSitemap < ::PostSitemap
+    slug "articles"
+  end
+
+  class DraftArticleSitemap < ArticleSitemap
+  end
+
+  def test_two_sources_with_the_same_slug_are_refused_before_anything_is_written
+    Maptain.configuration.sources = [PostSitemap, Admin::PostSitemap]
+
+    assert_equal 'PostSitemap and ConfigurationTest::Admin::PostSitemap share the slug "post", which names their files: ' \
+      "give one a slug of its own", assert_raises(Maptain::ConfigurationError) { build }.message
+    assert_empty storage.writes
+  end
+
+  def test_a_subclass_writes_files_of_its_own
+    create_post(1)
+    Maptain.configuration.sources = [ArticleSitemap, DraftArticleSitemap]
+
+    assert_equal %w[sitemap-articles-00000.xml.gz sitemap-draft_article-00000.xml.gz], build.written
+  end
+
   def test_a_build_without_a_host_says_so
     Maptain.reset_configuration
     Maptain.configuration.storage = storage
