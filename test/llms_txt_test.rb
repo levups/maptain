@@ -344,7 +344,7 @@ class LlmsTxtTest < MaptainTest
     Maptain.configuration.sources = [source("RichSitemap") do
       scope { title_by_page.keys }
       url { |page, locale| "/#{locale}/#{page}" }
-      llms_txt("Pages") { |page| [title_by_page[page], (rich.new("Who we are") if page == :about)] }
+      llms_txt("Pages") { |page| [title_by_page[page], page == :about && rich.new("Who we are")] }
     end]
     Maptain.configuration.llms_txt = {title: "Example", details: rich.new("Prices include VAT.")}
     build
