@@ -330,6 +330,34 @@ class LlmsTxtTest < MaptainTest
     refute_includes storage.content_by_name.fetch("llms.txt"), "posts/1"
   end
 
+  def test_rich_text_is_listed_as_its_text_and_binary_strings_as_utf_8
+    # Like ActionText::RichText: to_s renders its HTML.
+    rich = Struct.new(:html, :to_plain_text) do
+      def to_s
+        %(<div class="trix-content">#{html}</div>)
+      end
+    end
+    title_by_page = {about: rich.new("About us", "About us"), blank: rich.new("<br>", ""), cafe: "Caf\xC3\xA9".b}
+    Maptain.configuration.sources = [source("RichSitemap") do
+      scope { title_by_page.keys }
+      url { |page, locale| "/#{locale}/#{page}" }
+      llms_txt("Pages") { |page| [title_by_page[page], page == :about && rich.new("Who we are", "Who we are")] }
+    end]
+    Maptain.configuration.llms_txt = {title: "Example", details: rich.new("Prices include VAT.", "Prices include VAT.")}
+    build
+
+    assert_equal <<~MARKDOWN, storage.content_by_name.fetch("llms.txt").dup.force_encoding(Encoding::UTF_8)
+      # Example
+
+      Prices include VAT.
+
+      ## Pages
+
+      - [About us](https://example.com/en/about): Who we are
+      - [Café](https://example.com/en/cafe)
+    MARKDOWN
+  end
+
   def test_check_renders_it_without_writing_it
     Maptain.configuration.sources = [source("OutsideSitemap") do
       scope { %i[about] }

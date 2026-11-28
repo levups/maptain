@@ -123,9 +123,14 @@ module Maptain
     # Text XML 1.0 can hold: UTF-8 whatever the String's encoding, without invalid bytes or the control characters
     # XML forbids, trimmed.
     def text(value)
-      string = value.to_s
+      string = plain_text(value)
       string = (string.encoding == Encoding::BINARY) ? string.dup.force_encoding(Encoding::UTF_8) : string.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: "")
       string.scrub("").gsub(XML_FORBIDDEN, "").strip
+    end
+
+    # An Action Text body as its text: its to_s is the HTML it renders.
+    def plain_text(value)
+      value.respond_to?(:to_plain_text) ? value.to_plain_text.to_s : value.to_s
     end
 
     # At most limit characters as a reader counts them: an accent stays with its letter.
