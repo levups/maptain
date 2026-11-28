@@ -2,7 +2,7 @@
 
 module Maptain
   # What the last build wrote: for each shard of each source, its fingerprint and its files. pending lists the
-  # files a build started to publish before it could record them, so that the next one can remove or rewrite them;
+  # files a build was about to write or delete when it died, so that the next one writes or removes them again;
   # unsubmitted the URLs IndexNow has yet to take, refused or not sent by a build that died, for the next one to
   # send; extras the digest of each file that is not a sitemap, such as llms.txt, by name.
   class Manifest

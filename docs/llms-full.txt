@@ -314,7 +314,7 @@ config.rebuild_every = 1.day   # default: a week; nil leaves it to maptain:rebui
 
 After deploying a change to a `url` block, run `maptain:rebuild` rather than wait.
 
-A build notes the files it is about to write or remove, and the URLs it is to send to IndexNow, in
+A build notes the files it is about to change or remove, and the URLs it is to send to IndexNow, in
 `sitemap-manifest.json`, its memory of what each file held, then writes the sitemap files, then the index, then
 the `llms.txt`, then removes the files no range fills any more, then writes the manifest again. A build that fails
 midway is repaired by the next one, which writes those files again and sends those URLs. Changing a host, the
@@ -690,7 +690,7 @@ config.rebuild_every = 1.day   # default: a week; nil leaves it to maptain:rebui
 
 After deploying a change to a `url` block, run `maptain:rebuild` rather than wait.
 
-A build notes the files it is about to write or remove, and the URLs it is to send to IndexNow, in `sitemap-manifest.json`, its memory of what each file held, then writes the sitemap files, then the index, then the `llms.txt`, then removes the files no range fills any more, then writes the manifest again. A build that fails midway is repaired by the next one, which writes those files again and sends those URLs. Changing a host, the languages, the size of a range or the version of Maptain rewrites everything it moves once.
+A build notes the files it is about to change or remove, and the URLs it is to send to IndexNow, in `sitemap-manifest.json`, its memory of what each file held, then writes the sitemap files, then the index, then the `llms.txt`, then removes the files no range fills any more, then writes the manifest again. A build that fails midway is repaired by the next one, which writes those files again and sends those URLs. Changing a host, the languages, the size of a range or the version of Maptain rewrites everything it moves once.
 
 ### Storage
 
