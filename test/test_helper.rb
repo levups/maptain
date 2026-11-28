@@ -27,7 +27,12 @@ ActiveRecord::Schema.define do
 end
 
 class Post < ActiveRecord::Base
+  alias_attribute :reviewed_on, :reviewed_at
   scope :published, -> { where(published: true) }
+
+  def first_published_at
+    created_at
+  end
 end
 
 class Token < ActiveRecord::Base

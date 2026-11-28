@@ -135,10 +135,7 @@ module Maptain
       # The sum of the ids moves when a record leaves a range and another enters it; the shard size, when the
       # ranges themselves move. Summed as offsets within the range: SQLite's SUM overflows on large ids.
       offset_sum = Arel.sql("SUM(#{model.quoted_table_name}.#{model.quoted_primary_key} % #{shard_size})")
-      latest_sql = fingerprint_sql
-      return relation.reorder(nil).group(shard_sql).pluck(shard_sql).to_h { |shard| [shard.to_i.to_s, nil] } unless latest_sql
-
-      relation.reorder(nil).group(shard_sql).pluck(shard_sql, Arel.sql("COUNT(*)"), offset_sum, latest_sql)
+      relation.reorder(nil).group(shard_sql).pluck(*[shard_sql, Arel.sql("COUNT(*)"), offset_sum, fingerprint_sql].compact)
         .to_h { |shard, count, sum, latest| [shard.to_i.to_s, "#{shard_size}/#{count}/#{sum.to_i}/#{precise(latest)}"] }
     end
 
@@ -398,17 +395,24 @@ module Maptain
       end
     end
 
-    # The latest change of a range, or nil when no column holds it (a model without updated_at, a lastmod that is a
-    # method): its ranges are then rendered at each build, and their files uploaded when they differ.
+    # The latest change of a range: the lastmod column, else updated_at, which a block or a method may read. nil for
+    # a model without updated_at and a lastmod left as it is: its ranges then change with their ids alone, like a
+    # record changed with update_columns, until the next full build.
     def fingerprint_sql
       return Arel.sql("MAX(#{definitions[:fingerprint]})") if definitions[:fingerprint]
 
       lastmod = definitions[:lastmod]
-      column = (lastmod.is_a?(Symbol) || lastmod.is_a?(String)) ? lastmod.to_s : "updated_at"
-      column = model.attribute_alias(column) || column
-      return unless model.column_names.include?(column)
+      named = lastmod.to_s if lastmod.is_a?(Symbol) || lastmod.is_a?(String)
+      column = [named, "updated_at"].filter_map { |name| model.attribute_alias(name) || name if name }
+        .find { |name| model.column_names.include?(name) }
+      if named && named != "updated_at" && column != (model.attribute_alias(named) || named) && !model.method_defined?(named)
+        raise SourceError, "#{self.class.name}'s lastmod #{lastmod.inspect} is neither a column nor a method of #{model.name}"
+      end
+      return Arel.sql("MAX(#{model.quoted_table_name}.#{model.adapter_class.quote_column_name(column)})") if column
+      return if lastmod.nil? || named == "updated_at"
 
-      Arel.sql("MAX(#{model.quoted_table_name}.#{model.adapter_class.quote_column_name(column)})")
+      raise SourceError, "#{self.class.name}'s lastmod #{lastmod.respond_to?(:call) ? "block" : lastmod.inspect} " \
+        "is not a column of #{model.name}, which has no updated_at: name the column to watch with fingerprint"
     end
   end
 end

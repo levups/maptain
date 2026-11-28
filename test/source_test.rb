@@ -39,35 +39,46 @@ class SourceTest < MaptainTest
     assert_includes assert_raises(Maptain::SourceError) { build }.message, "integer primary key"
   end
 
-  def test_a_model_without_updated_at_is_listed_without_lastmod_and_rendered_at_each_build
-    Maptain.configuration.sources = [Class.new(Maptain::Source) do
-      slug "tag"
-      scope { Tag.all }
-      url { |tag, locale| "/#{locale}/tags/#{tag.name}" }
-    end]
+  def test_a_model_without_updated_at_is_listed_without_lastmod_and_its_ranges_follow_their_ids
+    Maptain.configuration.sources = [tag_sitemap]
     Tag.create!(id: 1, name: "ruby")
-    Tag.create!(id: 4, name: "rails")
     build
 
     assert_includes storage.xml("sitemap-tag-00000.xml.gz"), "<url><loc>https://example.com/en/tags/ruby</loc><xhtml:link"
     assert_empty build.written
-    Tag.find(1).update!(name: "crystal")
-
-    assert_equal %w[sitemap-tag-00000.xml.gz], build.written
-    Tag.delete_all
-    Tag.create!(id: 2, name: "ruby")
-    Tag.create!(id: 3, name: "rails")
+    Tag.create!(id: 2, name: "rails")
 
     assert_equal %w[sitemap-tag-00000.xml.gz], build.written
   end
 
-  def test_a_lastmod_column_named_by_a_string_is_the_one_watched
-    Maptain.configuration.sources = [Class.new(PostSitemap) { lastmod "reviewed_at" }]
-    create_post(1, reviewed_at: LONG_AGO)
-    build
-    Post.find(1).update_columns(reviewed_at: LONG_AGO + 60)
+  def test_a_lastmod_block_on_a_model_without_updated_at_needs_a_fingerprint
+    Maptain.configuration.sources = [Class.new(tag_sitemap) { lastmod { Date.new(2026, 1, 1) } }]
+    Tag.create!(name: "ruby")
 
-    assert_includes build.written, "sitemap-post-00000.xml.gz"
+    assert_includes assert_raises(Maptain::SourceError) { build }.message, "name the column to watch with fingerprint"
+  end
+
+  def test_a_lastmod_named_by_a_string_or_an_alias_is_the_column_watched
+    %w[reviewed_at reviewed_on].each do |name|
+      Post.delete_all
+      Maptain.configuration.sources = [Class.new(PostSitemap) { lastmod name }]
+      create_post(1, reviewed_at: LONG_AGO)
+      build
+      Post.find(1).update_columns(reviewed_at: LONG_AGO + 60)
+
+      assert_includes build.written, "sitemap-post-00000.xml.gz", name
+    end
+  end
+
+  def test_a_lastmod_that_is_a_method_watches_updated_at_and_a_misspelled_one_is_refused
+    Maptain.configuration.sources = [Class.new(PostSitemap) { lastmod :first_published_at }]
+    create_post(1)
+    build
+
+    assert_includes storage.xml("sitemap-post-00000.xml.gz"), "<lastmod>2026-01-01T12:00:00Z</lastmod>"
+    Maptain.configuration.sources = [Class.new(PostSitemap) { lastmod :updated_on }]
+
+    assert_includes assert_raises(Maptain::SourceError) { build }.message, "lastmod :updated_on is neither a column nor a method of Post"
   end
 
   def test_a_record_without_a_url_in_a_language_is_left_out_of_it
@@ -119,6 +130,14 @@ class SourceTest < MaptainTest
   end
 
   private
+
+  def tag_sitemap
+    Class.new(Maptain::Source) do
+      slug "tag"
+      scope { Tag.all }
+      url { |tag, locale| "/#{locale}/tags/#{tag.name}" }
+    end
+  end
 
   def first_page(source_class = PostSitemap)
     source_class.new(Maptain.configuration).each_page("0").first
