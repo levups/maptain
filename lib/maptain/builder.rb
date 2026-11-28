@@ -88,8 +88,14 @@ module Maptain
       deleted = (@previous.file_names | @previous.pending | @previous.extras.keys) - @manifest.file_names -
         @rendered.flat_map { |rendered| rendered.files.map(&:name) } - llms_txt_by_name.to_h.keys
       @changed_urls.concat(@rendered.flat_map(&:changed_urls))
-      # Not the pages of moved ranges, nor the articles of a news file gone because they grew old.
-      @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) || @news_sources.include?(previous_source_of(name)) })) if @diffing
+      # Not the pages of moved ranges, nor the articles of a news file gone because they grew old, nor those of a
+      # range rendered again, which appeared_or_gone compared with all its previous files.
+      rendered_shards = @rendered.to_set { |rendered| [rendered.source_slug, rendered.shard] }
+      gone_files = deleted.reject do |name|
+        source_slug, shard = previous_shard_of(name)
+        @moved_sources.include?(source_slug) || @news_sources.include?(source_slug) || rendered_shards.include?([source_slug, shard])
+      end
+      @changed_urls.concat(urls_in(gone_files)) if @diffing
       urls = urls_to_submit
       changed_names = @rendered.flat_map(&:files).reject { |file| same_as_before?(file) }.to_set(&:name)
       changed_llms_txt = llms_txt_by_name.to_h.reject { |name, content| same_llms_txt_as_before?(name, content) }
@@ -110,7 +116,9 @@ module Maptain
 
     def build_source(source)
       seen_urls = Set.new
-      source.fingerprint_by_shard.sort_by { |shard, _fingerprint| shard.to_i }.each do |shard, fingerprint|
+      fingerprint_by_shard = source.fingerprint_by_shard
+      @moved_sources << source.slug if ranges_moved?(source.slug, fingerprint_by_shard)
+      fingerprint_by_shard.sort_by { |shard, _fingerprint| shard.to_i }.each do |shard, fingerprint|
         stored = @previous.shard(source.slug, shard) if @reusable
         if fingerprint && stored && stored["fingerprint"] == fingerprint && stored["files"].none? { |file| @pending.include?(file["name"]) }
           keep(source, shard, stored)
@@ -141,10 +149,12 @@ module Maptain
         writer.close
       end
 
-      if writer.files.all? { |file| same_as_before?(file) }
-        changed_urls.clear
-      elsif urls
-        changed_urls.concat(appeared_or_gone(source.slug, shard, fingerprint, urls, gone: !source.news?))
+      # A file dropped from a range is a change too, even when the files left are as they were.
+      unchanged = writer.files.all? { |file| same_as_before?(file) }
+      changed_urls.clear if unchanged
+      stored_names = @previous.shard(source.slug, shard)&.fetch("files")&.map { |file| file["name"] } || []
+      if urls && !(unchanged && writer.files.map(&:name) == stored_names)
+        changed_urls.concat(appeared_or_gone(source.slug, shard, urls, gone: !source.news?))
       end
       fingerprint ||= writer.content_digest
       # Recorded now, published once every shard is rendered: the index keeps the order of the sources.
@@ -155,16 +165,24 @@ module Maptain
     # Read while the previous files are still in the storage: a page that appeared or went away is a change too,
     # whatever its lastmod says. Not when the ranges moved, which only carries pages from one file to another.
     # gone: false for news, whose articles leave when they grow old, not when their page does.
-    def appeared_or_gone(source_slug, shard, fingerprint, urls, gone: true)
-      stored = @previous.shard(source_slug, shard)
-      if stored && fingerprint && stored["fingerprint"].to_s.split("/").first != fingerprint.split("/").first
-        @moved_sources << source_slug
-        return []
-      end
+    def appeared_or_gone(source_slug, shard, urls, gone: true)
+      return [] if @moved_sources.include?(source_slug)
 
+      stored = @previous.shard(source_slug, shard)
       previous_urls = urls_in((stored&.fetch("files") || []).map { |file| file["name"] }).to_set
       urls = urls.to_set
       gone ? (urls - previous_urls).to_a + (previous_urls - urls).to_a : (urls - previous_urls).to_a
+    end
+
+    # Whether the size of the ranges, the first part of their fingerprints, is not the one the last build stored:
+    # every range then holds other ids, those it did not have before included.
+    def ranges_moved?(source_slug, fingerprint_by_shard)
+      sizes = fingerprint_by_shard.values.filter_map { |fingerprint| fingerprint&.split("/")&.first }
+      # A range fingerprint starts with its size; the digest of a source rendered whole has no "/".
+      stored = @previous.shards_by_source.fetch(source_slug, {}).values.filter_map do |shard|
+        shard["fingerprint"].to_s.split("/").first if shard["fingerprint"].to_s.include?("/")
+      end
+      sizes.any? && (stored - sizes).any?
     end
 
     def publish_rendered(changed_names)
@@ -178,11 +196,12 @@ module Maptain
       end
     end
 
-    def previous_source_of(file_name)
-      @previous_source_by_file_name ||= @previous.shards_by_source.each_with_object({}) do |(source_slug, shards), source_by_name|
-        shards.each_value { |stored| stored["files"].each { |file| source_by_name[file["name"]] = source_slug } }
+    # [source slug, shard] of a file the last build recorded, or nil.
+    def previous_shard_of(file_name)
+      @previous_shard_by_file_name ||= @previous.shards_by_source.each_with_object({}) do |(source_slug, shards), shard_by_name|
+        shards.each { |shard, stored| stored["files"].each { |file| shard_by_name[file["name"]] = [source_slug, shard] } }
       end
-      @previous_source_by_file_name[file_name]
+      @previous_shard_by_file_name[file_name]
     end
 
     def urls_in(names)

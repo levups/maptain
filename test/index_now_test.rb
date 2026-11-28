@@ -198,6 +198,35 @@ class IndexNowTest < MaptainTest
     assert_operator died_at, :>, 2
   end
 
+  def test_smaller_ranges_send_nothing_that_did_not_change
+    Maptain.configuration.sources = [Class.new(PostSitemap) { shard_size 10 }]
+    (1..9).each { |id| create_post(id) }
+    build
+    Maptain.configuration.sources = [Class.new(PostSitemap) { shard_size 5 }]
+
+    assert_equal 0, build.submitted
+  end
+
+  def test_pages_moving_back_into_the_first_file_of_their_range_are_not_sent_and_those_of_a_dropped_file_are
+    max_urls = Maptain::ShardWriter::MAX_URLS_PER_FILE
+    silence_warnings { Maptain::ShardWriter.const_set(:MAX_URLS_PER_FILE, 4) }
+    (1..3).each { |id| create_post(id) }
+    build
+    Post.where(id: 2).delete_all
+    build
+
+    assert_equal %w[https://example.com/en/posts/2 https://example.com/fr/posts/2], @requests.last.dig(1, "urlList")
+    create_post(5)
+    build
+    Post.where(id: 5).delete_all
+    @requests.clear
+    build
+
+    assert_equal [%w[https://example.com/en/posts/5 https://example.com/fr/posts/5]], @requests.map { |request| request.dig(1, "urlList") }
+  ensure
+    silence_warnings { Maptain::ShardWriter.const_set(:MAX_URLS_PER_FILE, max_urls) }
+  end
+
   def test_a_year_alone_is_not_a_change
     create_post(1)
     create_post(2)
