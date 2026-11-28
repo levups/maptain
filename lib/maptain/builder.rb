@@ -51,6 +51,8 @@ module Maptain
       @directory = directory
       @previous = Manifest.read(@storage, manifest_name)
       @previous_file_by_name = @previous.files.to_h { |file| [file["name"], file] }
+      # What a build that died started to publish: whatever its manifest says, the storage may hold something else.
+      @pending = @previous.pending.to_set
       built_at = Time.now
       @full = full || rebuild_due?(built_at)
       @reusable = !@full && @previous.digest == @configuration.digest
@@ -110,7 +112,7 @@ module Maptain
       seen_urls = Set.new
       source.fingerprint_by_shard.sort_by { |shard, _fingerprint| shard.to_i }.each do |shard, fingerprint|
         stored = @previous.shard(source.slug, shard) if @reusable
-        if fingerprint && stored && stored["fingerprint"] == fingerprint
+        if fingerprint && stored && stored["fingerprint"] == fingerprint && stored["files"].none? { |file| @pending.include?(file["name"]) }
           keep(source, shard, stored)
         else
           render(source, shard, fingerprint, seen_urls)
@@ -196,18 +198,18 @@ module Maptain
     end
 
     def same_as_before?(file)
-      @previous_file_by_name.dig(file.name, "digest") == file.digest
+      !@pending.include?(file.name) && @previous_file_by_name.dig(file.name, "digest") == file.digest
     end
 
-    # Recorded before the first upload, so that a build dying midway leaves no file the next one cannot remove, and
-    # no URL to submit it cannot find again: the files that told which pages appeared or went away are gone by then.
+    # Recorded before the first upload, so that a build dying midway leaves no file the next one cannot remove or
+    # would keep as it was before, and no URL to submit it cannot find again: the files that told which pages
+    # appeared or went away are gone by then.
     def announce(names, unsubmitted = @previous.unsubmitted)
-      new_names = names.to_a - @previous_file_by_name.keys - @previous.pending - @previous.extras.keys
-      unsubmitted = unsubmitted.last(MAX_UNSUBMITTED_URLS)
-      return if new_names.empty? && unsubmitted == @previous.unsubmitted
+      new_names = names.to_a - @previous.pending
+      return if new_names.empty? && (unsubmitted - @previous.unsubmitted).empty?
 
       @previous.pending.concat(new_names)
-      @previous.unsubmitted.replace(unsubmitted)
+      @previous.unsubmitted.replace(unsubmitted.last(MAX_UNSUBMITTED_URLS))
       upload(manifest_name, @previous.to_json)
     end
 
@@ -281,7 +283,9 @@ module Maptain
 
     # Each file is published when it differs from the last build's, the new ones announced together.
     def publish_llms_txt(content_by_name)
-      changed = content_by_name.select { |name, content| @full || @previous.extras[name] != Digest::SHA256.hexdigest(content) }
+      changed = content_by_name.select do |name, content|
+        @full || @pending.include?(name) || @previous.extras[name] != Digest::SHA256.hexdigest(content)
+      end
       announce(changed.keys)
       content_by_name.each do |name, content|
         @manifest.extras[name] = Digest::SHA256.hexdigest(content)

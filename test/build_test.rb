@@ -237,6 +237,30 @@ class BuildTest < MaptainTest
     assert_equal %w[sitemap-post-00001.xml.gz], built.deleted
   end
 
+  def test_a_file_a_build_died_after_rewriting_is_rewritten_even_with_its_records_back
+    create_post(1)
+    build
+    create_post(2)
+    failing = Class.new(MemoryStorage) do
+      def write(name, source_path)
+        raise IOError, "disk full" if name == "sitemap.xml"
+
+        super
+      end
+    end.new
+    failing.content_by_name.merge!(storage.content_by_name)
+    Maptain.configuration.storage = failing
+
+    assert_raises(IOError) { Maptain.build }
+    Post.where(id: 2).delete_all
+    @storage = MemoryStorage.new
+    storage.content_by_name.merge!(failing.content_by_name)
+    Maptain.configuration.storage = storage
+
+    assert_equal %w[sitemap-post-00000.xml.gz], build.written
+    refute_includes storage.xml("sitemap-post-00000.xml.gz"), "/posts/2"
+  end
+
   def test_a_full_build_rewrites_everything
     create_post(1)
     build

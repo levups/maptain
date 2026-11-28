@@ -2,8 +2,9 @@
 
 module Maptain
   # What the last build wrote: for each shard of each source, its fingerprint and its files. pending lists the
-  # files a build started to publish before it could record them, so that the next one can remove them;
-  # unsubmitted the URLs IndexNow did not take, for the next one to send again; extras the digest of each file
+  # files a build started to publish before it could record them, so that the next one can remove or rewrite them;
+  # unsubmitted the URLs IndexNow has yet to take, refused or not sent by a build that died, for the next one to
+  # send; extras the digest of each file
   # that is not a sitemap, such as llms.txt, by name.
   class Manifest
     attr_reader :built_at, :rebuilt_at, :digest, :shards_by_source, :pending, :unsubmitted, :extras
