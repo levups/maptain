@@ -78,7 +78,7 @@ module Maptain
       @news_sources = @configuration.sources.select { |source_class| source_class.definitions.key?(:news) }.to_set { |source_class| source_class.slug }
 
       llms_txt_sources = []
-      @configuration.sources.each do |source_class|
+      @configuration.sources.uniq.each do |source_class|
         source = source_class.new(@configuration)
         build_source(source)
         llms_txt_sources << source if @configuration.llms_txt && source.llms_txt?

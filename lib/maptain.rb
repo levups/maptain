@@ -3,6 +3,7 @@
 require "active_support"
 require "active_support/core_ext/object/blank"
 require "active_support/core_ext/string/inflections"
+require "active_support/descendants_tracker"
 require "active_support/notifications"
 require "date"
 require "digest"

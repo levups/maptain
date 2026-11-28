@@ -51,6 +51,44 @@ class ConfigurationTest < MaptainTest
     assert_nil Maptain.configuration.index_now_key_location
   end
 
+  def test_two_sources_with_the_same_slug_are_refused_before_anything_is_written
+    admin = Module.new
+    ConfigurationTest.const_set(:Admin, admin)
+    admin.const_set(:PostSitemap, Class.new(PageSitemap))
+    articles = Class.new(PostSitemap) { slug "articles" }
+    ConfigurationTest.const_set(:ArticleSitemap, articles)
+    ConfigurationTest.const_set(:DraftArticleSitemap, Class.new(articles))
+    Maptain.configuration.sources = [PostSitemap, Admin::PostSitemap, PostSitemap]
+
+    assert_equal 'PostSitemap, ConfigurationTest::Admin::PostSitemap share the slug "post", which names their files: ' \
+      "give each a slug of its own", assert_raises(Maptain::ConfigurationError) { build }.message
+    assert_empty storage.writes
+    Maptain.configuration.sources = [ArticleSitemap, DraftArticleSitemap]
+
+    assert_includes assert_raises(Maptain::ConfigurationError) { build }.message, 'share the slug "articles"'
+    assert_empty storage.writes
+  ensure
+    ActiveSupport::DescendantsTracker.clear([admin::PostSitemap, articles].compact) if admin && articles
+    %i[Admin ArticleSitemap DraftArticleSitemap].each { |name| ConfigurationTest.send(:remove_const, name) if ConfigurationTest.const_defined?(name, false) }
+  end
+
+  # What Rails' reloader asks of a class before it drops it from descendants once unloaded (railties' finisher.rb).
+  def test_a_source_the_rails_reloader_unloads_is_not_found_any_more
+    Maptain.reset_configuration
+    unloaded = ConfigurationTest.const_set(:UnloadedSitemap, Class.new(PostSitemap) { slug "unloaded" })
+    ConfigurationTest.send(:remove_const, :UnloadedSitemap)
+    ActiveSupport::DescendantsTracker.clear([unloaded]) if unloaded.singleton_class < ActiveSupport::DescendantsTracker
+
+    refute_includes Maptain.configuration.sources, unloaded
+  end
+
+  def test_a_source_listed_twice_is_built_once
+    create_post(1)
+    Maptain.configuration.sources = [PostSitemap, PageSitemap, PostSitemap]
+
+    assert_equal %w[sitemap-post-00000.xml.gz sitemap-page.xml.gz], build.written
+  end
+
   def test_a_build_without_a_host_says_so
     Maptain.reset_configuration
     Maptain.configuration.storage = storage

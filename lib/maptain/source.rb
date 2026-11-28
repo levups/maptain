@@ -8,6 +8,9 @@ module Maptain
   #     url { |product, locale| product_url(product, locale:) }
   #   end
   class Source
+    # Lets the Rails reloader drop the classes it unloads from Source.descendants, where sources are found.
+    extend ActiveSupport::DescendantsTracker
+
     # The protocol allows 50 MiB a file, uncompressed. Shards aim lower: the sizes below are estimates.
     TARGET_BYTES_PER_FILE = 40 * 1024 * 1024
     BYTES_PER_URL_ESTIMATE = 150

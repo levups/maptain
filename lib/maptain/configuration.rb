@@ -43,7 +43,14 @@ module Maptain
 
     # Checked when a build starts, not when host_by_locale or llms_txt is set: locales may be set after them.
     def validate!
+      host!
       llms_txt&.locale_in(self)
+      sources.uniq.group_by(&:slug).each do |slug, same_slug|
+        next if same_slug.one?
+
+        raise ConfigurationError, "#{same_slug.map { |source_class| source_class.name || "a subclass of #{source_class.superclass.name || source_class.superclass.slug}" }.join(", ")} " \
+          "share the slug #{slug.inspect}, which names their files: give each a slug of its own"
+      end
       hreflangs = locales.map { |locale| Xml.hreflang(locale) }
       unknown = host_by_locale.keys - hreflangs
       return if unknown.empty?
@@ -86,7 +93,8 @@ module Maptain
       return @sources if @sources
 
       load_sources.call
-      Source.descendants.select(&:scope?).sort_by(&:slug)
+      # Named: a Class.new(…) left by a test would be found until it is garbage collected.
+      Source.descendants.select { |source_class| source_class.name && source_class.scope? }.sort_by(&:slug)
     end
 
     # Whatever changes every file: a build under another digest starts over.
