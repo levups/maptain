@@ -219,9 +219,10 @@ class IndexNowTest < MaptainTest
     create_post(5)
     build
     Post.where(id: 5).delete_all
+    @requests.clear
     build
 
-    assert_equal %w[https://example.com/en/posts/5 https://example.com/fr/posts/5], @requests.last.dig(1, "urlList")
+    assert_equal [%w[https://example.com/en/posts/5 https://example.com/fr/posts/5]], @requests.map { |request| request.dig(1, "urlList") }
   ensure
     silence_warnings { Maptain::ShardWriter.const_set(:MAX_URLS_PER_FILE, max_urls) }
   end
