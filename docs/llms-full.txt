@@ -256,8 +256,8 @@ of `config.locales`: a build refuses any other.
 
 `lastmod` is read from `updated_at`. Name another column when the content has its own: `lastmod
 :content_updated_at`. A model without `updated_at` is listed without `lastmod`: its files are rewritten when
-records are added to a range or leave it, and by the full build for any other change. A `lastmod` no column
-holds, a block or a method, needs a `fingerprint` (below), or the build stops.
+records are added to a range or leave it, and by the full build for any other change. On such a model, a
+`lastmod` block or method needs a `fingerprint` (below), or the build stops.
 
 A column that moves when the content does not, such as an `updated_at` touched by a view counter, makes every
 build rewrite files for nothing and tells search engines a date that is not true. Give such a model a column of
@@ -637,7 +637,7 @@ The other languages stay on `config.host`, and so does the index. The `robots.tx
 lastmod :content_updated_at
 ```
 
-A model without `updated_at` is listed without `lastmod`: its files are rewritten when records are added to a range or leave it, and by the full build for any other change. A `lastmod` no column holds, a block or a method, needs a `fingerprint` (below), or the build stops.
+A model without `updated_at` is listed without `lastmod`: its files are rewritten when records are added to a range or leave it, and by the full build for any other change. On such a model, a `lastmod` block or method needs a `fingerprint` (below), or the build stops.
 
 A column that moves when the content does not, such as an `updated_at` touched by a view counter, makes every build rewrite files for nothing and tells search engines a date that is not true. Give such a model a column for content changes.
 

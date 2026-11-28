@@ -165,7 +165,7 @@
       <div class="prose">
         <p><code>lastmod</code> is read from <code>updated_at</code>. Name another column when the content has its own:</p>
 <pre><code class="language-ruby"><span class="n">lastmod</span> <span class="ss">:content_updated_at</span></code></pre>
-        <p>A model without <code>updated_at</code> is listed without <code>lastmod</code>: its files are rewritten when records are added to a range or leave it, and by the full build for any other change. A <code>lastmod</code> no column holds, a block or a method, needs a <code>fingerprint</code> (below), or the build stops.</p>
+        <p>A model without <code>updated_at</code> is listed without <code>lastmod</code>: its files are rewritten when records are added to a range or leave it, and by the full build for any other change. On such a model, a <code>lastmod</code> block or method needs a <code>fingerprint</code> (below), or the build stops.</p>
         <p>A column that moves when the content does not, such as an <code>updated_at</code> touched by a view counter, makes every build rewrite files for nothing and tells search engines a date that is not true. Give such a model a column for content changes.</p>
         <h3>When the date depends on more than one column</h3>
         <p><code>lastmod</code> also takes a block. The build then needs to know what to watch in the database, as an SQL expression:</p>
