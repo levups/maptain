@@ -30,9 +30,8 @@ joins CI's `rails` matrix.
   itself (the slug).
 - A build renders every shard, records the names of the sitemap files and llms.txt it is about to write as
   `pending` in the manifest, with the URLs to submit, publishes the sitemap files, then the index, then the
-  llms.txt, then deletes, then writes the manifest with the URLs
-  IndexNow has yet to take, submits them, and writes the manifest again. Keep that order: it is what lets the next
-  build repair one that died midway.
+  llms.txt, then deletes, then writes the manifest with the URLs IndexNow has yet to take, submits them, and
+  writes the manifest again. Keep that order: it is what lets the next build repair one that died midway.
 - `priority`, `changefreq` and the ping endpoints are left out on purpose.
 - The README is the user guide and `docs/` the GitHub Pages site: change them with the code. The README's table and
   `docs/benchmarks.html` come from the same `bench/build.rb` run.
