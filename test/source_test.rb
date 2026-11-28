@@ -52,15 +52,27 @@ class SourceTest < MaptainTest
   end
 
   def test_a_lastmod_no_column_holds_needs_a_fingerprint
-    [Class.new(tag_sitemap) { lastmod { Date.new(2026, 1, 1) } }, Class.new(PostSitemap) { lastmod :updated_on }].each do |source_class|
+    dated_tag = Class.new(ActiveRecord::Base) do
+      self.table_name = "tags"
+      alias_attribute :updated_at, :name
+    end
+    create_post(1)
+    Tag.create!(name: "ruby")
+    [Class.new(tag_sitemap) { lastmod { Date.new(2026, 1, 1) } }, Class.new(tag_sitemap) { scope { dated_tag.all } },
+      Class.new(PostSitemap) { lastmod :updated_on }].each do |source_class|
       Maptain.configuration.sources = [source_class]
-      create_post(1)
-      Tag.create!(name: "ruby")
 
       assert_includes assert_raises(Maptain::SourceError) { build }.message, "to watch: name it with fingerprint"
-      Post.delete_all
-      Tag.delete_all
     end
+    Maptain.configuration.sources = [Class.new(tag_sitemap) {
+      lastmod { Date.new(2026, 1, 1) }
+      fingerprint "tags.id"
+    }, Class.new(tag_sitemap) {
+         slug "undated"
+         lastmod nil
+       }]
+
+    assert_empty build.warnings
   end
 
   def test_a_record_without_a_url_in_a_language_is_left_out_of_it

@@ -401,11 +401,15 @@ module Maptain
       expression = definitions[:fingerprint] ||
         ("#{model.quoted_table_name}.#{model.adapter_class.quote_column_name(column)}" if model.column_names.include?(column.to_s))
       return Arel.sql("MAX(#{expression})") if expression
-      # A date the pages show but no column holds: nothing would tell a build that it moved.
-      return unless column != :updated_at || definitions[:lastmod].respond_to?(:call) ||
-        model.attribute_names.include?("updated_at") || model.method_defined?(:updated_at)
 
-      raise SourceError, "#{self.class.name || slug}'s lastmod has no column of #{model.table_name} to watch: name it with fingerprint"
+      lastmod = definitions[:lastmod]
+      return unless lastmod
+      return if lastmod == :updated_at && !model.attribute_names.include?("updated_at") &&
+        !model.attribute_alias?("updated_at") && !model.method_defined?(:updated_at)
+
+      # A date the pages show but no column holds: nothing would tell a build that it moved.
+      given = lastmod.respond_to?(:call) ? "block" : lastmod.inspect
+      raise SourceError, "#{self.class.name || slug}'s lastmod #{given} has no column of #{model.table_name} to watch: name it with fingerprint"
     end
   end
 end
