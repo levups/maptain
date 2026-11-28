@@ -19,8 +19,7 @@ module Maptain
     # A language, then maybe a script and a region: en, pt-BR, zh-Hant-TW, es-419.
     HREFLANG = /\A[a-z]{2,3}(-[a-z]{4})?(-([a-z]{2}|\d{3}))?\z/i
 
-    # changed_urls: the pages whose lastmod moved; compared_urls: those that appeared or went away.
-    Rendered = Data.define(:source_slug, :shard, :fingerprint, :files, :changed_urls, :compared_urls)
+    Rendered = Data.define(:source_slug, :shard, :fingerprint, :files, :changed_urls)
 
     # others: how many more times its source made the same mistake.
     Warning = Data.define(:source, :url, :message, :others) do
@@ -88,15 +87,16 @@ module Maptain
       llms_txt_by_name = render_llms_txt(llms_txt_sources) if @configuration.llms_txt
       deleted = (@previous.file_names | @previous.pending | @previous.extras.keys) - @manifest.file_names -
         @rendered.flat_map { |rendered| rendered.files.map(&:name) } - llms_txt_by_name.to_h.keys
-      compared_urls = @rendered.flat_map(&:compared_urls)
+      @changed_urls.concat(@rendered.flat_map(&:changed_urls))
       # Not the pages of moved ranges, nor the articles of a news file gone because they grew old.
-      compared_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) || @news_sources.include?(previous_source_of(name)) })) if @diffing
-      @changed_urls.concat(@rendered.flat_map(&:changed_urls), compared_urls)
+      @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) || @news_sources.include?(previous_source_of(name)) })) if @diffing
       urls = urls_to_submit
-      # The next build finds the lastmods that moved again, not the pages the files it compared with held.
-      publish_rendered(urls & (@previous.unsubmitted + compared_urls))
+      changed_names = @rendered.flat_map(&:files).reject { |file| same_as_before?(file) }.to_set(&:name)
+      changed_llms_txt = llms_txt_by_name.to_h.reject { |name, content| same_llms_txt_as_before?(name, content) }
+      announce(changed_names + changed_llms_txt.keys, urls)
+      publish_rendered(changed_names)
       publish_index
-      publish_llms_txt(llms_txt_by_name) if llms_txt_by_name
+      publish_llms_txt(llms_txt_by_name, changed_llms_txt) if llms_txt_by_name
       deleted.each { |name| @storage.delete(name) }
       publish_index_now_key
       # Written before submitting, with the URLs still to send: a build that dies while submitting loses none.
@@ -130,7 +130,6 @@ module Maptain
       max_urls = source.news? ? Xml::MAX_NEWS_PER_FILE : ShardWriter::MAX_URLS_PER_FILE
       writer = ShardWriter.new(directory: @directory, basename: source.basename(shard), max_urls:)
       changed_urls = []
-      compared_urls = []
       urls = [] if @diffing
       ActiveSupport::Notifications.instrument("shard.maptain", source: source.slug, shard:) do
         source.each_page(shard) do |page|
@@ -145,12 +144,12 @@ module Maptain
       if writer.files.all? { |file| same_as_before?(file) }
         changed_urls.clear
       elsif urls
-        compared_urls = appeared_or_gone(source.slug, shard, fingerprint, urls, gone: !source.news?)
+        changed_urls.concat(appeared_or_gone(source.slug, shard, fingerprint, urls, gone: !source.news?))
       end
       fingerprint ||= writer.content_digest
       # Recorded now, published once every shard is rendered: the index keeps the order of the sources.
       @manifest.record(source.slug, shard, fingerprint:, files: [])
-      @rendered << Rendered.new(source_slug: source.slug, shard:, fingerprint:, files: writer.files, changed_urls:, compared_urls:)
+      @rendered << Rendered.new(source_slug: source.slug, shard:, fingerprint:, files: writer.files, changed_urls:)
     end
 
     # Read while the previous files are still in the storage: a page that appeared or went away is a change too,
@@ -168,9 +167,7 @@ module Maptain
       gone ? (urls - previous_urls).to_a + (previous_urls - urls).to_a : (urls - previous_urls).to_a
     end
 
-    def publish_rendered(unsubmitted)
-      changed_names = @rendered.flat_map(&:files).reject { |file| same_as_before?(file) }.to_set(&:name)
-      announce(changed_names, unsubmitted)
+    def publish_rendered(changed_names)
       @rendered.each do |rendered|
         entries = rendered.files.map do |file|
           changed = changed_names.include?(file.name)
@@ -203,8 +200,8 @@ module Maptain
 
     # Recorded before the first upload, so that a build dying midway leaves no file the next one cannot remove or
     # would keep as it was before, and no URL to submit it cannot find again: the files that told which pages
-    # appeared or went away are gone by then.
-    def announce(names, unsubmitted = @previous.unsubmitted)
+    # appeared or went away are gone by then, and a lastmod tells nothing once its page is deleted.
+    def announce(names, unsubmitted)
       new_names = names.to_a - @previous.pending
       return if new_names.empty? && (unsubmitted - @previous.unsubmitted).empty?
 
@@ -281,15 +278,15 @@ module Maptain
       end
     end
 
-    # Each file is published when it differs from the last build's, the new ones announced together.
-    def publish_llms_txt(content_by_name)
-      changed = content_by_name.select do |name, content|
-        @full || @pending.include?(name) || @previous.extras[name] != Digest::SHA256.hexdigest(content)
-      end
-      announce(changed.keys)
+    def same_llms_txt_as_before?(name, content)
+      !@pending.include?(name) && @previous.extras[name] == Digest::SHA256.hexdigest(content)
+    end
+
+    # Each file is published when it differs from the last build's, every one by a full build.
+    def publish_llms_txt(content_by_name, changed)
       content_by_name.each do |name, content|
         @manifest.extras[name] = Digest::SHA256.hexdigest(content)
-        if changed.key?(name)
+        if @full || changed.key?(name)
           upload(name, content)
           @written << name
         else
