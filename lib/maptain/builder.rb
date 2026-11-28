@@ -50,6 +50,8 @@ module Maptain
       @directory = directory
       @previous = Manifest.read(@storage, manifest_name)
       @previous_file_by_name = @previous.files.to_h { |file| [file["name"], file] }
+      # What a build that died started to publish: whatever its manifest says, the storage may hold something else.
+      @pending = @previous.pending.to_set
       built_at = Time.now
       @full = full || rebuild_due?(built_at)
       @reusable = !@full && @previous.digest == @configuration.digest
@@ -83,15 +85,20 @@ module Maptain
       end
       # Rendered before anything is published: a block that raises stops the build before it changes the storage.
       llms_txt_by_name = render_llms_txt(llms_txt_sources) if @configuration.llms_txt
-      publish_rendered
-      publish_index
-      publish_llms_txt(llms_txt_by_name) if llms_txt_by_name
-      deleted = (@previous.file_names | @previous.pending | @previous.extras.keys) - @manifest.file_names - @manifest.extras.keys
+      deleted = (@previous.file_names | @previous.pending | @previous.extras.keys) - @manifest.file_names -
+        @rendered.flat_map { |rendered| rendered.files.map(&:name) } - llms_txt_by_name.to_h.keys
+      @changed_urls.concat(@rendered.flat_map(&:changed_urls))
       # Not the pages of moved ranges, nor the articles of a news file gone because they grew old.
       @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) || @news_sources.include?(previous_source_of(name)) })) if @diffing
+      urls = urls_to_submit
+      changed_names = @rendered.flat_map(&:files).reject { |file| same_as_before?(file) }.to_set(&:name)
+      changed_llms_txt = llms_txt_by_name.to_h.reject { |name, content| same_llms_txt_as_before?(name, content) }
+      announce(changed_names + changed_llms_txt.keys + deleted, urls)
+      publish_rendered(changed_names)
+      publish_index
+      publish_llms_txt(llms_txt_by_name, changed_llms_txt) if llms_txt_by_name
       deleted.each { |name| @storage.delete(name) }
       publish_index_now_key
-      urls = urls_to_submit
       # Written before submitting, with the URLs still to send: a build that dies while submitting loses none.
       @manifest.unsubmitted.replace(urls.last(MAX_UNSUBMITTED_URLS))
       upload(manifest_name, @manifest.to_json)
@@ -105,7 +112,7 @@ module Maptain
       seen_urls = Set.new
       source.fingerprint_by_shard.sort_by { |shard, _fingerprint| shard.to_i }.each do |shard, fingerprint|
         stored = @previous.shard(source.slug, shard) if @reusable
-        if fingerprint && stored && stored["fingerprint"] == fingerprint
+        if fingerprint && stored && stored["fingerprint"] == fingerprint && stored["files"].none? { |file| @pending.include?(file["name"]) }
           keep(source, shard, stored)
         else
           render(source, shard, fingerprint, seen_urls)
@@ -160,11 +167,8 @@ module Maptain
       gone ? (urls - previous_urls).to_a + (previous_urls - urls).to_a : (urls - previous_urls).to_a
     end
 
-    def publish_rendered
-      changed_names = @rendered.flat_map(&:files).reject { |file| same_as_before?(file) }.to_set(&:name)
-      announce_new_files(changed_names)
+    def publish_rendered(changed_names)
       @rendered.each do |rendered|
-        @changed_urls.concat(rendered.changed_urls)
         entries = rendered.files.map do |file|
           changed = changed_names.include?(file.name)
           publish(file, changed)
@@ -191,15 +195,18 @@ module Maptain
     end
 
     def same_as_before?(file)
-      @previous_file_by_name.dig(file.name, "digest") == file.digest
+      !@pending.include?(file.name) && @previous_file_by_name.dig(file.name, "digest") == file.digest
     end
 
-    # Recorded before the first upload, so that a build dying midway leaves no file the next one cannot remove.
-    def announce_new_files(names)
-      new_names = names.to_a - @previous_file_by_name.keys - @previous.pending - @previous.extras.keys
-      return if new_names.empty?
+    # Recorded before the first upload, so that a build dying midway leaves no file the next one cannot remove or
+    # would keep as it was before (or gone), and no URL to submit it cannot find again: the files that told which pages
+    # appeared or went away are gone by then, and a lastmod tells nothing once its page is deleted.
+    def announce(names, unsubmitted)
+      new_names = names.to_a - @previous.pending
+      return if new_names.empty? && (unsubmitted - @previous.unsubmitted).empty?
 
       @previous.pending.concat(new_names)
+      @previous.unsubmitted.replace(unsubmitted.last(MAX_UNSUBMITTED_URLS))
       upload(manifest_name, @previous.to_json)
     end
 
@@ -271,13 +278,15 @@ module Maptain
       end
     end
 
-    # Each file is published when it differs from the last build's, the new ones announced together.
-    def publish_llms_txt(content_by_name)
-      changed = content_by_name.select { |name, content| @full || @previous.extras[name] != Digest::SHA256.hexdigest(content) }
-      announce_new_files(changed.keys)
+    def same_llms_txt_as_before?(name, content)
+      !@pending.include?(name) && @previous.extras[name] == Digest::SHA256.hexdigest(content)
+    end
+
+    # Each file is published when it differs from the last build's, every one by a full build.
+    def publish_llms_txt(content_by_name, changed)
       content_by_name.each do |name, content|
         @manifest.extras[name] = Digest::SHA256.hexdigest(content)
-        if changed.key?(name)
+        if @full || changed.key?(name)
           upload(name, content)
           @written << name
         else

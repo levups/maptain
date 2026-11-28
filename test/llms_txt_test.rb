@@ -69,6 +69,30 @@ class LlmsTxtTest < MaptainTest
     assert_includes storage.content_by_name.fetch("llms.txt"), "- [Post one](https://example.com/en/posts/1)"
   end
 
+  def test_one_a_build_died_after_writing_is_written_again_even_with_its_records_back
+    create_post(1)
+    build
+    Post.find(1).update!(title: "Post one")
+    failing = Class.new(MemoryStorage) do
+      def write(name, source_path)
+        raise IOError, "connection reset" if writes.include?("llms.txt")
+
+        super
+      end
+    end.new
+    failing.content_by_name.merge!(storage.content_by_name)
+    Maptain.configuration.storage = failing
+
+    assert_raises(IOError) { Maptain.build }
+    Post.find(1).update!(title: "Post 1")
+    @storage = MemoryStorage.new
+    storage.content_by_name.merge!(failing.content_by_name)
+    Maptain.configuration.storage = storage
+
+    assert_includes build.written, "llms.txt"
+    assert_includes storage.content_by_name.fetch("llms.txt"), "- [Post 1](https://example.com/en/posts/1)"
+  end
+
   def test_a_full_build_writes_it_again
     create_post(1)
     build

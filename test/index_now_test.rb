@@ -30,6 +30,52 @@ class IndexNowTest < MaptainTest
 
   attr_accessor :network_error, :response_code
 
+  # Raises at the given write or delete, counted from the first.
+  class DyingStorage < MemoryStorage
+    attr_accessor :steps_left
+
+    def write(name, source_path)
+      step
+      super
+    end
+
+    def delete(name)
+      step
+      super
+    end
+
+    private
+
+    def step
+      raise IOError, "the build died here" if steps_left && (self.steps_left -= 1).zero?
+    end
+  end
+
+  # Whether the build after the change died, and the URLs it and the next build sent.
+  def urls_sent_by_a_build_dying_at(step)
+    Post.delete_all
+    @storage = DyingStorage.new
+    Maptain.configuration.storage = storage
+    create_post(1)
+    create_post(2)
+    create_post(12)
+    build
+    yield
+    @requests.clear
+    storage.steps_left = step
+    died = begin
+      build
+      false
+    rescue IOError
+      true
+    end
+    storage.steps_left = nil
+    build
+
+    assert_empty JSON.parse(storage.content_by_name["sitemap-manifest.json"])["unsubmitted"]
+    [died, @requests.flat_map { |request| request.dig(1, "urlList") }.uniq.sort]
+  end
+
   def test_the_first_build_publishes_the_key_and_submits_nothing
     create_post(1)
     built = build
@@ -122,6 +168,34 @@ class IndexNowTest < MaptainTest
     self.network_error = nil
 
     assert_equal 2, build.submitted
+  end
+
+  def test_a_build_that_dies_at_any_step_leaves_its_urls_for_the_next
+    expected = %w[1 2 3 12].flat_map { |id| ["https://example.com/en/posts/#{id}", "https://example.com/fr/posts/#{id}"] }.sort
+    died_at = (1..).find do |step|
+      died, sent = urls_sent_by_a_build_dying_at(step) do
+        Post.find(1).update!(title: "Edited", updated_at: Time.now)
+        Post.find(2).update!(published: false, updated_at: LONG_AGO)
+        Post.where(id: 12).delete_all
+        create_post(3)
+      end
+
+      assert_equal expected, sent, "died at step #{step}"
+      !died
+    end
+
+    assert_operator died_at, :>, 6
+  end
+
+  def test_a_build_that_dies_deleting_a_file_leaves_its_urls_for_the_next
+    died_at = (1..).find do |step|
+      died, sent = urls_sent_by_a_build_dying_at(step) { Post.where(id: 12).delete_all }
+
+      assert_equal %w[https://example.com/en/posts/12 https://example.com/fr/posts/12], sent, "died at step #{step}"
+      !died
+    end
+
+    assert_operator died_at, :>, 2
   end
 
   def test_a_year_alone_is_not_a_change
