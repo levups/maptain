@@ -358,6 +358,27 @@ class LlmsTxtTest < MaptainTest
     MARKDOWN
   end
 
+  def test_invalid_utf_8_is_listed_without_its_broken_bytes
+    broken = "Caf\xE9 au lait".dup.force_encoding(Encoding::UTF_8)
+    Maptain.configuration.sources = [source("BrokenSitemap") do
+      scope { %i[cafe] }
+      url { |page, locale| "/#{locale}/#{page}" }
+      llms_txt(broken) { [broken, broken] }
+    end]
+    Maptain.configuration.llms_txt = {title: "Example", summary: broken}
+    build
+
+    assert_equal <<~MARKDOWN, storage.content_by_name.fetch("llms.txt").dup.force_encoding(Encoding::UTF_8)
+      # Example
+
+      > Caf au lait
+
+      ## Caf au lait
+
+      - [Caf au lait](https://example.com/en/cafe): Caf au lait
+    MARKDOWN
+  end
+
   def test_check_renders_it_without_writing_it
     Maptain.configuration.sources = [source("OutsideSitemap") do
       scope { %i[about] }
