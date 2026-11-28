@@ -201,7 +201,8 @@ end
 
 A video without a title, a description, a thumbnail or a `player_loc` or `content_loc` is left out with a warning,
 as is one lasting more than 8 hours, one whose player is the page itself, or one with a date that lacks its day.
-Titles are cut at 100 characters, descriptions at 2,048.
+Titles are cut at 100 characters, descriptions at 2,048. An Action Text body, here or in the `news` and `llms_txt`
+blocks, is written as its text, not its HTML.
 
 Google News reads articles of the last two days only, and 1,000 per file at most: a source with a `news` block gets
 files that hold no more. Give the articles a source of their own, scoped to those days: an article that leaves the

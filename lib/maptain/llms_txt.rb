@@ -27,7 +27,7 @@ module Maptain
 
     # Text worth writing: neither blank nor a missing translation.
     def self.present?(text)
-      text.present? && !text.to_s.match?(MISSING_TRANSLATION)
+      text.present? && !Xml.plain_text(text).match?(MISSING_TRANSLATION)
     end
 
     # title, summary and details: a String, or a block run in the language of the file. locale: the language of
@@ -76,7 +76,7 @@ module Maptain
       lines = ["# #{line(title).presence || host}"]
       summary = line(summary)
       lines << "> #{summary}" unless summary.empty?
-      details = details.to_s.strip
+      details = Xml.plain_text(details).strip
       lines << details unless details.empty?
       entries.group_by(&:section).each do |section, section_entries|
         lines << "## #{line(section)}"
@@ -115,7 +115,7 @@ module Maptain
 
     # Markdown reads a line break as the end of an item or a heading.
     def line(text)
-      text.to_s.gsub(/[[:space:]]+/, " ").strip
+      Xml.plain_text(text).gsub(/[[:space:]]+/, " ").strip
     end
 
     # Serves /llms.txt from config.storage, the file of the request's host, for one host per language or sitemaps

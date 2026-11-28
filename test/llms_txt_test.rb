@@ -330,6 +330,35 @@ class LlmsTxtTest < MaptainTest
     refute_includes storage.content_by_name.fetch("llms.txt"), "posts/1"
   end
 
+  def test_rich_text_is_listed_as_its_text
+    rich = Struct.new(:body) do
+      def to_s
+        %(<div class="trix-content">#{body}</div>)
+      end
+
+      def to_plain_text
+        body
+      end
+    end
+    Maptain.configuration.sources = [source("RichSitemap") do
+      scope { %i[about] }
+      url { |page, locale| about_path(locale:) }
+      llms_txt("Pages") { [rich.new("About us"), rich.new("Who we are")] }
+    end]
+    Maptain.configuration.llms_txt = {title: "Example", details: rich.new("Prices include VAT.")}
+    build
+
+    assert_equal <<~MARKDOWN, storage.content_by_name.fetch("llms.txt")
+      # Example
+
+      Prices include VAT.
+
+      ## Pages
+
+      - [About us](https://example.com/en/about): Who we are
+    MARKDOWN
+  end
+
   def test_check_renders_it_without_writing_it
     Maptain.configuration.sources = [source("OutsideSitemap") do
       scope { %i[about] }

@@ -229,7 +229,16 @@ class MediaTest < MaptainTest
   end
 
   def test_rich_text_and_binary_strings_are_written_as_text
-    rich = Struct.new(:body) { def to_s = "Rich \u0001 #{body}" }
+    # Like ActionText::RichText: to_s renders its HTML.
+    rich = Struct.new(:body) do
+      def to_s
+        %(<div class="trix-content">#{body}</div>)
+      end
+
+      def to_plain_text
+        "Rich \u0001 #{body}"
+      end
+    end
     Maptain.configuration.sources = [video_source { VIDEO.merge(title: "caf\xC3\xA9".b, description: rich.new("text")) }]
     create_post(1)
     build
