@@ -51,7 +51,7 @@ class IndexNowTest < MaptainTest
     end
   end
 
-  # Whether the build died, and the URLs it and the next build sent.
+  # Whether the build after the change died, and the URLs it and the next build sent.
   def urls_sent_by_a_build_dying_at(step)
     Post.delete_all
     @storage = DyingStorage.new
@@ -60,10 +60,7 @@ class IndexNowTest < MaptainTest
     create_post(2)
     create_post(12)
     build
-    Post.find(1).update!(title: "Edited", updated_at: Time.now)
-    Post.find(2).update!(published: false, updated_at: LONG_AGO)
-    Post.where(id: 12).delete_all
-    create_post(3)
+    yield
     @requests.clear
     storage.steps_left = step
     died = begin
@@ -176,13 +173,29 @@ class IndexNowTest < MaptainTest
   def test_a_build_that_dies_at_any_step_leaves_its_urls_for_the_next
     expected = %w[1 2 3 12].flat_map { |id| ["https://example.com/en/posts/#{id}", "https://example.com/fr/posts/#{id}"] }.sort
     died_at = (1..).find do |step|
-      died, sent = urls_sent_by_a_build_dying_at(step)
+      died, sent = urls_sent_by_a_build_dying_at(step) do
+        Post.find(1).update!(title: "Edited", updated_at: Time.now)
+        Post.find(2).update!(published: false, updated_at: LONG_AGO)
+        Post.where(id: 12).delete_all
+        create_post(3)
+      end
 
       assert_equal expected, sent, "died at step #{step}"
       !died
     end
 
     assert_operator died_at, :>, 6
+  end
+
+  def test_a_build_that_dies_deleting_a_file_leaves_its_urls_for_the_next
+    died_at = (1..).find do |step|
+      died, sent = urls_sent_by_a_build_dying_at(step) { Post.where(id: 12).delete_all }
+
+      assert_equal %w[https://example.com/en/posts/12 https://example.com/fr/posts/12], sent, "died at step #{step}"
+      !died
+    end
+
+    assert_operator died_at, :>, 2
   end
 
   def test_a_year_alone_is_not_a_change

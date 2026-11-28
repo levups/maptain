@@ -28,10 +28,10 @@ joins CI's `rails` matrix.
 - A file name is a promise: the same ids land in the same file at every build. Anything that moves them belongs in
   `Configuration#digest` (the file name), in each shard's fingerprint (the shard size), or rewrites everything by
   itself (the slug).
-- A build renders every shard, records the names of the sitemap files and llms.txt it is about to write as
-  `pending` in the manifest, with the URLs to submit, publishes the sitemap files, then the index, then the
-  llms.txt, then deletes, then writes the manifest with the URLs IndexNow has yet to take, submits them, and
-  writes the manifest again. Keep that order: it is what lets the next build repair one that died midway.
+- A build renders every shard, records the names of the files it is about to write or delete as `pending` in
+  the manifest, with the URLs to submit, publishes the sitemap files, then the index, then the llms.txt, then
+  deletes, then writes the manifest with the URLs IndexNow has yet to take, submits them, and writes the manifest
+  again. Keep that order: it is what lets the next build repair one that died midway.
 - `priority`, `changefreq` and the ping endpoints are left out on purpose.
 - The README is the user guide and `docs/` the GitHub Pages site: change them with the code. The README's table and
   `docs/benchmarks.html` come from the same `bench/build.rb` run.

@@ -93,7 +93,7 @@ module Maptain
       urls = urls_to_submit
       changed_names = @rendered.flat_map(&:files).reject { |file| same_as_before?(file) }.to_set(&:name)
       changed_llms_txt = llms_txt_by_name.to_h.reject { |name, content| same_llms_txt_as_before?(name, content) }
-      announce(changed_names + changed_llms_txt.keys, urls)
+      announce(changed_names + changed_llms_txt.keys + deleted, urls)
       publish_rendered(changed_names)
       publish_index
       publish_llms_txt(llms_txt_by_name, changed_llms_txt) if llms_txt_by_name
@@ -199,7 +199,7 @@ module Maptain
     end
 
     # Recorded before the first upload, so that a build dying midway leaves no file the next one cannot remove or
-    # would keep as it was before, and no URL to submit it cannot find again: the files that told which pages
+    # would keep as it was before (or gone), and no URL to submit it cannot find again: the files that told which pages
     # appeared or went away are gone by then, and a lastmod tells nothing once its page is deleted.
     def announce(names, unsubmitted)
       new_names = names.to_a - @previous.pending
