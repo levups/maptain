@@ -39,6 +39,22 @@ class SourceTest < MaptainTest
     assert_includes assert_raises(Maptain::SourceError) { build }.message, "integer primary key"
   end
 
+  def test_a_model_without_updated_at_is_listed_without_lastmod_and_its_ranges_follow_their_ids
+    Maptain.configuration.sources = [Class.new(Maptain::Source) do
+      slug "tag"
+      scope { Tag.all }
+      url { |tag, locale| "/#{locale}/tags/#{tag.name}" }
+    end]
+    Tag.create!(id: 1, name: "ruby")
+    build
+
+    assert_includes storage.xml("sitemap-tag-00000.xml.gz"), "<url><loc>https://example.com/en/tags/ruby</loc><xhtml:link"
+    assert_empty build.written
+    Tag.create!(id: 2, name: "rails")
+
+    assert_equal %w[sitemap-tag-00000.xml.gz], build.written
+  end
+
   def test_a_record_without_a_url_in_a_language_is_left_out_of_it
     create_post(1)
     english_only = Class.new(PostSitemap) { url { |post, locale| post_url(post, locale:) if locale == :en } }

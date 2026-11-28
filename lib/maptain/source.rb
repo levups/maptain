@@ -135,7 +135,7 @@ module Maptain
       # The sum of the ids moves when a record leaves a range and another enters it; the shard size, when the
       # ranges themselves move. Summed as offsets within the range: SQLite's SUM overflows on large ids.
       offset_sum = Arel.sql("SUM(#{model.quoted_table_name}.#{model.quoted_primary_key} % #{shard_size})")
-      relation.reorder(nil).group(shard_sql).pluck(shard_sql, Arel.sql("COUNT(*)"), offset_sum, fingerprint_sql)
+      relation.reorder(nil).group(shard_sql).pluck(*[shard_sql, Arel.sql("COUNT(*)"), offset_sum, fingerprint_sql].compact)
         .to_h { |shard, count, sum, latest| [shard.to_i.to_s, "#{shard_size}/#{count}/#{sum.to_i}/#{precise(latest)}"] }
     end
 
@@ -395,8 +395,11 @@ module Maptain
       end
     end
 
+    # nil for a model without the updated_at a source reads by default: its ranges change with their ids alone.
     def fingerprint_sql
       column = definitions[:lastmod].is_a?(Symbol) ? definitions[:lastmod] : :updated_at
+      return if !definitions[:fingerprint] && column == :updated_at && !model.column_names.include?("updated_at")
+
       expression = definitions[:fingerprint] ||
         "#{model.quoted_table_name}.#{model.adapter_class.quote_column_name(column)}"
       Arel.sql("MAX(#{expression})")

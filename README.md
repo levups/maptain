@@ -255,7 +255,8 @@ of `config.locales`: a build refuses any other.
 ## The date of a page
 
 `lastmod` is read from `updated_at`. Name another column when the content has its own: `lastmod
-:content_updated_at`.
+:content_updated_at`. A model without `updated_at` is listed without `lastmod`: its files are rewritten when
+records come or go, and by the full build for any other change.
 
 A column that moves when the content does not, such as an `updated_at` touched by a view counter, makes every
 build rewrite files for nothing and tells search engines a date that is not true. Give such a model a column of
