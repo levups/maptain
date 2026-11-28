@@ -20,6 +20,10 @@ ActiveRecord::Schema.define do
   create_table :tokens, id: :string do |table|
     table.timestamps
   end
+
+  create_table :tags do |table|
+    table.string :name, null: false
+  end
 end
 
 class Post < ActiveRecord::Base
@@ -27,6 +31,9 @@ class Post < ActiveRecord::Base
 end
 
 class Token < ActiveRecord::Base
+end
+
+class Tag < ActiveRecord::Base
 end
 
 ROUTES = ActionDispatch::Routing::RouteSet.new
@@ -92,6 +99,7 @@ class MaptainTest < Minitest::Test
 
   def setup
     Post.delete_all
+    Tag.delete_all
     Maptain.reset_configuration
     @storage = MemoryStorage.new
     Maptain.configure do |config|
