@@ -19,7 +19,8 @@ module Maptain
     # A language, then maybe a script and a region: en, pt-BR, zh-Hant-TW, es-419.
     HREFLANG = /\A[a-z]{2,3}(-[a-z]{4})?(-([a-z]{2}|\d{3}))?\z/i
 
-    Rendered = Data.define(:source_slug, :shard, :fingerprint, :files, :changed_urls)
+    # changed_urls: the pages whose lastmod moved; compared_urls: those that appeared or went away.
+    Rendered = Data.define(:source_slug, :shard, :fingerprint, :files, :changed_urls, :compared_urls)
 
     # others: how many more times its source made the same mistake.
     Warning = Data.define(:source, :url, :message, :others) do
@@ -85,11 +86,13 @@ module Maptain
       llms_txt_by_name = render_llms_txt(llms_txt_sources) if @configuration.llms_txt
       deleted = (@previous.file_names | @previous.pending | @previous.extras.keys) - @manifest.file_names -
         @rendered.flat_map { |rendered| rendered.files.map(&:name) } - llms_txt_by_name.to_h.keys
-      @changed_urls.concat(@rendered.flat_map(&:changed_urls))
+      compared_urls = @rendered.flat_map(&:compared_urls)
       # Not the pages of moved ranges, nor the articles of a news file gone because they grew old.
-      @changed_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) || @news_sources.include?(previous_source_of(name)) })) if @diffing
+      compared_urls.concat(urls_in(deleted.reject { |name| @moved_sources.include?(previous_source_of(name)) || @news_sources.include?(previous_source_of(name)) })) if @diffing
+      @changed_urls.concat(@rendered.flat_map(&:changed_urls), compared_urls)
       urls = urls_to_submit
-      publish_rendered(urls)
+      # The next build finds the lastmods that moved again, not the pages the files it compared with held.
+      publish_rendered(urls & (@previous.unsubmitted + compared_urls))
       publish_index
       publish_llms_txt(llms_txt_by_name) if llms_txt_by_name
       deleted.each { |name| @storage.delete(name) }
@@ -125,6 +128,7 @@ module Maptain
       max_urls = source.news? ? Xml::MAX_NEWS_PER_FILE : ShardWriter::MAX_URLS_PER_FILE
       writer = ShardWriter.new(directory: @directory, basename: source.basename(shard), max_urls:)
       changed_urls = []
+      compared_urls = []
       urls = [] if @diffing
       ActiveSupport::Notifications.instrument("shard.maptain", source: source.slug, shard:) do
         source.each_page(shard) do |page|
@@ -139,12 +143,12 @@ module Maptain
       if writer.files.all? { |file| same_as_before?(file) }
         changed_urls.clear
       elsif urls
-        changed_urls.concat(appeared_or_gone(source.slug, shard, fingerprint, urls, gone: !source.news?))
+        compared_urls = appeared_or_gone(source.slug, shard, fingerprint, urls, gone: !source.news?)
       end
       fingerprint ||= writer.content_digest
       # Recorded now, published once every shard is rendered: the index keeps the order of the sources.
       @manifest.record(source.slug, shard, fingerprint:, files: [])
-      @rendered << Rendered.new(source_slug: source.slug, shard:, fingerprint:, files: writer.files, changed_urls:)
+      @rendered << Rendered.new(source_slug: source.slug, shard:, fingerprint:, files: writer.files, changed_urls:, compared_urls:)
     end
 
     # Read while the previous files are still in the storage: a page that appeared or went away is a change too,
@@ -162,9 +166,9 @@ module Maptain
       gone ? (urls - previous_urls).to_a + (previous_urls - urls).to_a : (urls - previous_urls).to_a
     end
 
-    def publish_rendered(urls)
+    def publish_rendered(unsubmitted)
       changed_names = @rendered.flat_map(&:files).reject { |file| same_as_before?(file) }.to_set(&:name)
-      announce(changed_names, urls)
+      announce(changed_names, unsubmitted)
       @rendered.each do |rendered|
         entries = rendered.files.map do |file|
           changed = changed_names.include?(file.name)
@@ -197,13 +201,13 @@ module Maptain
 
     # Recorded before the first upload, so that a build dying midway leaves no file the next one cannot remove, and
     # no URL to submit it cannot find again: the files that told which pages appeared or went away are gone by then.
-    def announce(names, urls = @previous.unsubmitted)
+    def announce(names, unsubmitted = @previous.unsubmitted)
       new_names = names.to_a - @previous_file_by_name.keys - @previous.pending - @previous.extras.keys
-      urls = urls.last(MAX_UNSUBMITTED_URLS)
-      return if new_names.empty? && urls == @previous.unsubmitted
+      unsubmitted = unsubmitted.last(MAX_UNSUBMITTED_URLS)
+      return if new_names.empty? && unsubmitted == @previous.unsubmitted
 
       @previous.pending.concat(new_names)
-      @previous.unsubmitted.replace(urls)
+      @previous.unsubmitted.replace(unsubmitted)
       upload(manifest_name, @previous.to_json)
     end
 

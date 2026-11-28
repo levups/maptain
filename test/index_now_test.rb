@@ -74,6 +74,8 @@ class IndexNowTest < MaptainTest
     end
     storage.steps_left = nil
     build
+
+    assert_empty JSON.parse(storage.content_by_name["sitemap-manifest.json"])["unsubmitted"]
     [died, @requests.flat_map { |request| request.dig(1, "urlList") }.uniq.sort]
   end
 
