@@ -71,6 +71,15 @@ class ConfigurationTest < MaptainTest
     %i[Admin ArticleSitemap DraftArticleSitemap].each { |name| ConfigurationTest.send(:remove_const, name) if ConfigurationTest.const_defined?(name, false) }
   end
 
+  # What Rails' reloader asks of a class before it drops it from descendants once unloaded (railties' finisher.rb).
+  def test_a_source_the_rails_reloader_unloads_is_not_found_any_more
+    Maptain.reset_configuration
+    unloaded = Class.new(PostSitemap) { scope { Post.all } }
+    ActiveSupport::DescendantsTracker.clear([unloaded]) if unloaded.singleton_class < ActiveSupport::DescendantsTracker
+
+    refute_includes Maptain.configuration.sources, unloaded
+  end
+
   def test_a_source_listed_twice_is_built_once
     create_post(1)
     Maptain.configuration.sources = [PostSitemap, PageSitemap, PostSitemap]
