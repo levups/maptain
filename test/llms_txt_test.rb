@@ -331,22 +331,19 @@ class LlmsTxtTest < MaptainTest
   end
 
   def test_rich_text_is_listed_as_its_text_and_binary_strings_as_utf_8
-    rich = Struct.new(:body) do
+    # Like ActionText::RichText: to_s renders its HTML.
+    rich = Struct.new(:html, :to_plain_text) do
       def to_s
-        %(<div class="trix-content">#{body}</div>)
-      end
-
-      def to_plain_text
-        body.gsub(/<[^>]*>/, "")
+        %(<div class="trix-content">#{html}</div>)
       end
     end
-    title_by_page = {about: rich.new("About us"), blank: rich.new("<br>"), cafe: "Caf\xC3\xA9".b}
+    title_by_page = {about: rich.new("About us", "About us"), blank: rich.new("<br>", ""), cafe: "Caf\xC3\xA9".b}
     Maptain.configuration.sources = [source("RichSitemap") do
       scope { title_by_page.keys }
       url { |page, locale| "/#{locale}/#{page}" }
-      llms_txt("Pages") { |page| [title_by_page[page], page == :about && rich.new("Who we are")] }
+      llms_txt("Pages") { |page| [title_by_page[page], page == :about && rich.new("Who we are", "Who we are")] }
     end]
-    Maptain.configuration.llms_txt = {title: "Example", details: rich.new("Prices include VAT.")}
+    Maptain.configuration.llms_txt = {title: "Example", details: rich.new("Prices include VAT.", "Prices include VAT.")}
     build
 
     assert_equal <<~MARKDOWN, storage.content_by_name.fetch("llms.txt").dup.force_encoding(Encoding::UTF_8)
